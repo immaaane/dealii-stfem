@@ -40,15 +40,14 @@ main()
 
   QGauss<1> quad(r + 2);
 
-  FullMatrix<Number> full_matrix(r + 1, r + 1);
+  FullMatrix<Number> full_matrix(r + 1, r);
   full_matrix(0, 0) = 1.0;
 
   for (unsigned int i = 0; i < r + 1; ++i)
     for (unsigned int j = 0; j < r; ++j)
       for (unsigned int q = 0; q < quad.size(); ++q)
-        full_matrix(i, j + 1) += quad.weight(q) *
-                                 poly[i].value(quad.point(q)[0]) *
-                                 poly_radau[j].value(quad.point(q)[0]);
+        full_matrix(i, j) += quad.weight(q) * poly[i].value(quad.point(q)[0]) *
+                             poly_radau[j].value(quad.point(q)[0]);
 
   print_formatted(full_matrix);
 }
