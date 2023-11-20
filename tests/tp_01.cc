@@ -1,9 +1,19 @@
+#include <deal.II/base/quadrature_lib.h>
+
 #include <deal.II/dofs/dof_handler.h>
+#include <deal.II/dofs/dof_tools.h>
+
+#include <deal.II/fe/fe_q.h>
+
+#include <deal.II/grid/grid_generator.h>
 
 #include <deal.II/lac/block_vector.h>
 #include <deal.II/lac/solver_gmres.h>
 #include <deal.II/lac/sparse_matrix.h>
 #include <deal.II/lac/sparse_matrix_tools.h>
+
+#include <deal.II/numerics/data_out.h>
+#include <deal.II/numerics/matrix_creator.h>
 
 using namespace dealii;
 
@@ -126,6 +136,8 @@ public:
         // patch solver
         blocks[i].vmult(dst_local, src_local);
 
+        // TODO: weight!!!!!!!
+
         // scatter
         for (unsigned int b = 0, c = 0; b < n_blocks; ++b)
           for (unsigned int j = 0; j < indices[i].size(); ++j, ++c)
@@ -144,23 +156,61 @@ template <int dim>
 void
 test()
 {
-  using Number     = double;
-  using VectorType = BlockVector<Number>;
+  using Number          = double;
+  using BlockVectorType = BlockVector<Number>;
 
-  DoFHandler<dim> dof_handler;
+  const unsigned int fe_degree = 2;
+  const unsigned int n_blocks  = 3;
 
-  SolverControl           solver_control;
-  SolverGMRES<VectorType> solver(solver_control);
+  FE_Q<dim>   fe(fe_degree);
+  QGauss<dim> quad(fe_degree + 1);
 
-  VectorType x, rhs;
+  Triangulation<dim> tria;
+  GridGenerator::hyper_cube(tria);
+  tria.refine_global(4);
 
-  SparseMatrix<Number> K, M;  // TODO: fill
-  FullMatrix<Number>   A_inv; //
+  DoFHandler<dim> dof_handler(tria);
+  dof_handler.distribute_dofs(fe);
+
+  AffineConstraints<Number> constraints;
+  DoFTools::make_zero_boundary_constraints(dof_handler, constraints);
+  constraints.close();
+
+  // create sparsity pattern
+  SparsityPattern sparsity_pattern(dof_handler.n_dofs(), dof_handler.n_dofs());
+  DoFTools::make_sparsity_pattern(dof_handler, sparsity_pattern, constraints);
+
+  // create scalar siffness matrix
+  SparseMatrix<Number> K;
+  K.reinit(sparsity_pattern);
+  MatrixCreator::create_laplace_matrix<dim, dim>(
+    dof_handler, quad, K, nullptr, constraints);
+
+  // create scalar mass matrix
+  SparseMatrix<Number> M;
+  M.reinit(sparsity_pattern);
+  MatrixCreator::create_mass_matrix<dim, dim>(
+    dof_handler, quad, M, nullptr, constraints);
+
+  FullMatrix<Number> A_inv;
+
+  BlockVectorType x(n_blocks);
+  for (unsigned int i = 0; i < n_blocks; ++i)
+    x.block(i).reinit(dof_handler.n_dofs());
+
+  BlockVectorType rhs(n_blocks);
+  for (unsigned int i = 0; i < n_blocks; ++i)
+    rhs.block(i).reinit(dof_handler.n_dofs());
+
+  SolverControl                solver_control;
+  SolverGMRES<BlockVectorType> solver(solver_control);
 
   SystemMatrix<Number>   matrix(K, M, A_inv);
   Preconditioner<Number> preconditioner(K, M, A_inv, dof_handler);
 
   solver.solve(matrix, x, rhs, preconditioner);
+
+  DataOut<dim> data_out;
 }
 
 
