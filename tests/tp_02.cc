@@ -38,10 +38,14 @@ main()
   const auto poly_radau = Polynomials::generate_complete_Lagrange_basis(
     QGaussRadau<1>(r, QGaussRadau<1>::EndPoint::right).get_points());
 
+  std::vector< Polynomials::Polynomial< double > > poly_radau_derivative(poly_radau.size());
+
+  for(unsigned int i = 0; i < poly_radau.size(); ++i)
+    poly_radau_derivative[i] = poly_radau[i].derivative ();
+
   QGauss<1> quad(r + 2);
 
   FullMatrix<Number> full_matrix(r + 1, r);
-  full_matrix(0, 0) = 1.0;
 
   for (unsigned int i = 0; i < r + 1; ++i)
     for (unsigned int j = 0; j < r; ++j)
@@ -49,5 +53,14 @@ main()
         full_matrix(i, j) += quad.weight(q) * poly[i].value(quad.point(q)[0]) *
                              poly_radau[j].value(quad.point(q)[0]);
 
+  FullMatrix<Number> full_matrix_der(r + 1, r);
+
+  for (unsigned int i = 0; i < r + 1; ++i)
+    for (unsigned int j = 0; j < r; ++j)
+      for (unsigned int q = 0; q < quad.size(); ++q)
+        full_matrix_der(i, j) += quad.weight(q) * poly[i].value(quad.point(q)[0]) *
+                             poly_radau_derivative[j].value(quad.point(q)[0]);
+
   print_formatted(full_matrix);
+  print_formatted(full_matrix_der);
 }
