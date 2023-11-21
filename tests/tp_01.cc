@@ -163,6 +163,22 @@ private:
 public:
   using VectorType = Vector<Number>;
 
+  MatrixFreeOperator(const Mapping<dim>              &mapping,
+                     const DoFHandler<dim>           &dof_handler,
+                     const AffineConstraints<Number> &constraints,
+                     const Quadrature<dim>           &quadrature,
+                     const double                     mass_matrix_scaling,
+                     const double                     laplace_matrix_scaling)
+    : mass_matrix_scaling(mass_matrix_scaling)
+    , laplace_matrix_scaling(laplace_matrix_scaling)
+  {
+    typename MatrixFree<dim, Number>::AdditionalData additional_data;
+    additional_data.mapping_update_flags = update_values | update_gradients;
+
+    matrix_free.reinit(
+      mapping, dof_handler, constraints, quadrature, additional_data);
+  }
+
   void
   vmult(VectorType &dst, const VectorType &src) const
   {
@@ -225,8 +241,8 @@ private:
 
   MatrixFree<dim, Number> matrix_free;
 
-  double mass_matrix_scaling    = 0.0;
-  double laplace_matrix_scaling = 0.0;
+  double mass_matrix_scaling;
+  double laplace_matrix_scaling;
 };
 
 
@@ -240,6 +256,8 @@ test()
 
   const unsigned int fe_degree = 2;
   const unsigned int n_blocks  = 3;
+
+  MappingQ1<dim> mapping;
 
   FE_Q<dim>   fe(fe_degree);
   QGauss<dim> quad(fe_degree + 1);
@@ -263,17 +281,19 @@ test()
   SparseMatrix<Number> K;
   K.reinit(sparsity_pattern);
   MatrixCreator::create_laplace_matrix<dim, dim>(
-    dof_handler, quad, K, nullptr, constraints);
+    mapping, dof_handler, quad, K, nullptr, constraints);
 
   // create scalar mass matrix
   SparseMatrix<Number> M;
   M.reinit(sparsity_pattern);
   MatrixCreator::create_mass_matrix<dim, dim>(
-    dof_handler, quad, M, nullptr, constraints);
+    mapping, dof_handler, quad, M, nullptr, constraints);
 
   // matrix-free operators
-  MatrixFreeOperator<dim, Number> K_mf;
-  MatrixFreeOperator<dim, Number> M_mf;
+  MatrixFreeOperator<dim, Number> K_mf(
+    mapping, dof_handler, constraints, quad, 0.0, 1.0);
+  MatrixFreeOperator<dim, Number> M_mf(
+    mapping, dof_handler, constraints, quad, 1.0, 0.0);
 
   FullMatrix<Number> A_inv;
 
