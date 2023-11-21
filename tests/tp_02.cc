@@ -27,40 +27,103 @@ print_formatted(const FullMatrix<T> &matrix)
 int
 main()
 {
-  using Number         = double;
-  const unsigned int r = 2;
+  { // CG
+    using Number         = double;
+    const unsigned int r = 2;
 
-  // Lagrange polynomial
-  const auto poly = Polynomials::generate_complete_Lagrange_basis(
-    QGaussLobatto<1>(r + 1).get_points());
+    std::cout << "CG" << std::endl;
 
-  // Radau quadrature
-  const auto poly_radau = Polynomials::generate_complete_Lagrange_basis(
-    QGaussRadau<1>(r, QGaussRadau<1>::EndPoint::right).get_points());
+    auto const            trial_points = QGaussLobatto<1>(r + 1).get_points();
+    std::vector<Point<1>> test_points(trial_points.begin() + 1,
+                                      trial_points.end());
 
-  std::vector< Polynomials::Polynomial< double > > poly_radau_derivative(poly_radau.size());
+    // Lagrange polynomial
+    const auto poly_lobatto =
+      Polynomials::generate_complete_Lagrange_basis(trial_points);
 
-  for(unsigned int i = 0; i < poly_radau.size(); ++i)
-    poly_radau_derivative[i] = poly_radau[i].derivative ();
+    // Radau quadrature
+    const auto poly_test =
+      Polynomials::generate_complete_Lagrange_basis(test_points);
 
-  QGauss<1> quad(r + 2);
+    std::vector<Polynomials::Polynomial<double>> poly_lobatto_derivative(
+      poly_lobatto.size());
 
-  FullMatrix<Number> full_matrix(r + 1, r);
+    for (unsigned int i = 0; i < poly_lobatto.size(); ++i)
+      poly_lobatto_derivative[i] = poly_lobatto[i].derivative();
 
-  for (unsigned int i = 0; i < r + 1; ++i)
-    for (unsigned int j = 0; j < r; ++j)
-      for (unsigned int q = 0; q < quad.size(); ++q)
-        full_matrix(i, j) += quad.weight(q) * poly[i].value(quad.point(q)[0]) *
-                             poly_radau[j].value(quad.point(q)[0]);
+    QGauss<1> quad(r + 2);
 
-  FullMatrix<Number> full_matrix_der(r + 1, r);
+    FullMatrix<Number> full_matrix(r, r + 1);
 
-  for (unsigned int i = 0; i < r + 1; ++i)
-    for (unsigned int j = 0; j < r; ++j)
-      for (unsigned int q = 0; q < quad.size(); ++q)
-        full_matrix_der(i, j) += quad.weight(q) * poly[i].value(quad.point(q)[0]) *
-                             poly_radau_derivative[j].value(quad.point(q)[0]);
+    // Later multiply with tau_n
+    for (unsigned int i = 0; i < r; ++i)
+      for (unsigned int j = 0; j < r + 1; ++j)
+        for (unsigned int q = 0; q < quad.size(); ++q)
+          full_matrix(i, j) += quad.weight(q) *
+                               poly_test[i].value(quad.point(q)[0]) *
+                               poly_lobatto[j].value(quad.point(q)[0]);
 
-  print_formatted(full_matrix);
-  print_formatted(full_matrix_der);
+    FullMatrix<Number> full_matrix_der(r, r + 1);
+
+    for (unsigned int i = 0; i < r; ++i)
+      for (unsigned int j = 0; j < r + 1; ++j)
+        for (unsigned int q = 0; q < quad.size(); ++q)
+          full_matrix_der(i, j) +=
+            quad.weight(q) * poly_test[i].value(quad.point(q)[0]) *
+            poly_lobatto_derivative[j].value(quad.point(q)[0]);
+
+    print_formatted(full_matrix);
+    print_formatted(full_matrix_der);
+  }
+
+  { // DG
+    using Number         = double;
+    const unsigned int r = 2;
+
+    std::cout << "DG" << std::endl;
+
+    // Radau quadrature
+    const auto poly_radau = Polynomials::generate_complete_Lagrange_basis(
+      QGaussRadau<1>(r + 1, QGaussRadau<1>::EndPoint::right).get_points());
+
+    std::vector<Polynomials::Polynomial<double>> poly_radau_derivative(
+      poly_radau.size());
+
+    for (unsigned int i = 0; i < poly_radau.size(); ++i)
+      poly_radau_derivative[i] = poly_radau[i].derivative();
+
+    QGauss<1> quad(r + 2);
+
+    FullMatrix<Number> full_matrix(r + 1, r + 1); // Later multiply with tau_n
+    FullMatrix<Number> jump_matrix(r + 1, 1);
+
+    for (unsigned int i = 0; i < r + 1; ++i)
+      {
+        jump_matrix(i, 0) = poly_radau[i].value(0.0);
+        for (unsigned int j = 0; j < r + 1; ++j)
+          // Integration
+          for (unsigned int q = 0; q < quad.size(); ++q)
+            full_matrix(i, j) += quad.weight(q) *
+                                 poly_radau[i].value(quad.point(q)[0]) *
+                                 poly_radau[j].value(quad.point(q)[0]);
+      }
+
+    FullMatrix<Number> full_matrix_der(r + 1, r + 1);
+
+    for (unsigned int i = 0; i < r + 1; ++i)
+      for (unsigned int j = 0; j < r + 1; ++j)
+        {
+          // Jump
+          full_matrix_der(i, j) +=
+            poly_radau[i].value(0) * poly_radau[j].value(0);
+          // Integration
+          for (unsigned int q = 0; q < quad.size(); ++q)
+            full_matrix_der(i, j) +=
+              quad.weight(q) * poly_radau[i].value(quad.point(q)[0]) *
+              poly_radau_derivative[j].value(quad.point(q)[0]);
+        }
+    print_formatted(jump_matrix);
+    print_formatted(full_matrix);
+    print_formatted(full_matrix_der);
+  }
 }
