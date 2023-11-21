@@ -17,16 +17,16 @@
 
 using namespace dealii;
 
-template <typename Number>
+template <typename Number, typename SystemMatrixType>
 class SystemMatrix
 {
 public:
   using VectorType      = Vector<Number>;
   using BlockVectorType = BlockVector<Number>;
 
-  SystemMatrix(const SparseMatrix<Number> &K,
-               const SparseMatrix<Number> &M,
-               const FullMatrix<Number>   &A_inv)
+  SystemMatrix(const SystemMatrixType   &K,
+               const SystemMatrixType   &M,
+               const FullMatrix<Number> &A_inv)
     : K(K)
     , M(M)
     , A_inv(A_inv)
@@ -52,9 +52,9 @@ public:
   }
 
 private:
-  const SparseMatrix<Number> &K;
-  const SparseMatrix<Number> &M;
-  const FullMatrix<Number>   &A_inv;
+  const SystemMatrixType   &K;
+  const SystemMatrixType   &M;
+  const FullMatrix<Number> &A_inv;
 };
 
 
@@ -205,7 +205,7 @@ test()
   SolverControl                solver_control;
   SolverGMRES<BlockVectorType> solver(solver_control);
 
-  SystemMatrix<Number>   matrix(K, M, A_inv);
+  SystemMatrix<Number, SparseMatrix<Number>> matrix(K, M, A_inv);
   Preconditioner<Number> preconditioner(K, M, A_inv, dof_handler);
 
   solver.solve(matrix, x, rhs, preconditioner);
