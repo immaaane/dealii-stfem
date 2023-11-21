@@ -178,43 +178,55 @@ private:
     const VectorType                            &src,
     const std::pair<unsigned int, unsigned int> &range) const
   {
-    FECellIntegrator eval(matrix_free);
+    FECellIntegrator integrator(matrix_free);
 
     for (unsigned int cell = range.first; cell < range.second; ++cell)
       {
-        eval.reinit(cell);
+        integrator.reinit(cell);
 
         // gather
-        eval.read_dof_values(src);
+        integrator.read_dof_values(src);
 
         // evaluate
-        eval.evaluate(EvaluationFlags::values | EvaluationFlags::gradients);
+        if (mass_matrix_scaling != 0.0 && laplace_matrix_scaling != 0.0)
+          integrator.evaluate(EvaluationFlags::values |
+                              EvaluationFlags::gradients);
+        else if (mass_matrix_scaling != 0.0)
+          integrator.evaluate(EvaluationFlags::values);
+        else if (laplace_matrix_scaling != 0.0)
+          integrator.evaluate(EvaluationFlags::gradients);
 
         // quadrature
-        for (const auto q : eval.quadrature_point_indices())
+        for (unsigned int q = 0; q < integrator.n_q_points; ++q)
           {
-            typename FECellIntegrator::value_type    value;
-            typename FECellIntegrator::gradient_type gradient;
-
-            if (true)
-              value = eval.get_value(q);
-
-            if (true)
-              gradient = eval.get_gradient(q);
-
-            eval.submit_value(value, q);
-            eval.submit_gradient(gradient, q);
+            if (mass_matrix_scaling != 0.0)
+              integrator.submit_value(mass_matrix_scaling *
+                                        integrator.get_value(q),
+                                      q);
+            if (laplace_matrix_scaling != 0.0)
+              integrator.submit_gradient(laplace_matrix_scaling *
+                                           integrator.get_gradient(q),
+                                         q);
           }
 
-        // ingrate
-        eval.integrate(EvaluationFlags::values | EvaluationFlags::gradients);
+        // integrate
+        if (mass_matrix_scaling != 0.0 && laplace_matrix_scaling != 0.0)
+          integrator.integrate(EvaluationFlags::values |
+                               EvaluationFlags::gradients);
+        else if (mass_matrix_scaling != 0.0)
+          integrator.integrate(EvaluationFlags::values);
+        else if (laplace_matrix_scaling != 0.0)
+          integrator.integrate(EvaluationFlags::gradients);
 
         // scatter
-        eval.distribute_local_to_global(dst);
+        integrator.distribute_local_to_global(dst);
       }
   }
 
   MatrixFree<dim, Number> matrix_free;
+
+  double mass_matrix_scaling    = 0.0;
+  double laplace_matrix_scaling = 0.0;
 };
 
 
