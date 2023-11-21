@@ -12,6 +12,9 @@
 #include <deal.II/lac/sparse_matrix.h>
 #include <deal.II/lac/sparse_matrix_tools.h>
 
+#include <deal.II/matrix_free/fe_evaluation.h>
+#include <deal.II/matrix_free/matrix_free.h>
+
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/matrix_creator.h>
 
@@ -151,6 +154,70 @@ private:
 };
 
 
+template <int dim, typename Number>
+class MatrixFreeOperator
+{
+private:
+  using FECellIntegrator = FEEvaluation<dim, -1, 0, 1, Number>;
+
+public:
+  using VectorType = Vector<Number>;
+
+  void
+  vmult(VectorType &dst, const VectorType &src) const
+  {
+    matrix_free.cell_loop(
+      &MatrixFreeOperator::do_cell_integral_range, this, dst, src, true);
+  }
+
+private:
+  void
+  do_cell_integral_range(
+    const MatrixFree<dim, Number>               &matrix_free,
+    VectorType                                  &dst,
+    const VectorType                            &src,
+    const std::pair<unsigned int, unsigned int> &range) const
+  {
+    FECellIntegrator eval(matrix_free);
+
+    for (unsigned int cell = range.first; cell < range.second; ++cell)
+      {
+        eval.reinit(cell);
+
+        // gather
+        eval.read_dof_values(src);
+
+        // evaluate
+        eval.evaluate(EvaluationFlags::values | EvaluationFlags::gradients);
+
+        // quadrature
+        for (const auto q : eval.quadrature_point_indices())
+          {
+            typename FECellIntegrator::value_type    value;
+            typename FECellIntegrator::gradient_type gradient;
+
+            if (true)
+              value = eval.get_value(q);
+
+            if (true)
+              gradient = eval.get_gradient(q);
+
+            eval.submit_value(value, q);
+            eval.submit_gradient(gradient, q);
+          }
+
+        // ingrate
+        eval.integrate(EvaluationFlags::values | EvaluationFlags::gradients);
+
+        // scatter
+        eval.distribute_local_to_global(dst);
+      }
+  }
+
+  MatrixFree<dim, Number> matrix_free;
+};
+
+
 
 template <int dim>
 void
@@ -192,6 +259,10 @@ test()
   MatrixCreator::create_mass_matrix<dim, dim>(
     dof_handler, quad, M, nullptr, constraints);
 
+  // matrix-free operators
+  MatrixFreeOperator<dim, Number> K_mf;
+  MatrixFreeOperator<dim, Number> M_mf;
+
   FullMatrix<Number> A_inv;
 
   BlockVectorType x(n_blocks);
@@ -205,7 +276,9 @@ test()
   SolverControl                solver_control;
   SolverGMRES<BlockVectorType> solver(solver_control);
 
-  SystemMatrix<Number, SparseMatrix<Number>> matrix(K, M, A_inv);
+  SystemMatrix<Number, MatrixFreeOperator<dim, Number>> matrix(K_mf,
+                                                               M_mf,
+                                                               A_inv);
   Preconditioner<Number> preconditioner(K, M, A_inv, dof_handler);
 
   solver.solve(matrix, x, rhs, preconditioner);
