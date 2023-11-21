@@ -14,6 +14,7 @@
 
 #include <deal.II/matrix_free/fe_evaluation.h>
 #include <deal.II/matrix_free/matrix_free.h>
+#include <deal.II/matrix_free/tools.h>
 
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/matrix_creator.h>
@@ -186,6 +187,16 @@ public:
       &MatrixFreeOperator::do_cell_integral_range, this, dst, src, true);
   }
 
+  void
+  compute_system_matrix(SparseMatrix<Number> &sparse_matrix) const
+  {
+    MatrixFreeTools::compute_matrix(matrix_free,
+                                    matrix_free.get_affine_constraints(),
+                                    sparse_matrix,
+                                    &MatrixFreeOperator::do_cell_integral_local,
+                                    this);
+  }
+
 private:
   void
   do_cell_integral_range(
@@ -203,40 +214,44 @@ private:
         // gather
         integrator.read_dof_values(src);
 
-        // evaluate
-        if (mass_matrix_scaling != 0.0 && laplace_matrix_scaling != 0.0)
-          integrator.evaluate(EvaluationFlags::values |
-                              EvaluationFlags::gradients);
-        else if (mass_matrix_scaling != 0.0)
-          integrator.evaluate(EvaluationFlags::values);
-        else if (laplace_matrix_scaling != 0.0)
-          integrator.evaluate(EvaluationFlags::gradients);
-
-        // quadrature
-        for (unsigned int q = 0; q < integrator.n_q_points; ++q)
-          {
-            if (mass_matrix_scaling != 0.0)
-              integrator.submit_value(mass_matrix_scaling *
-                                        integrator.get_value(q),
-                                      q);
-            if (laplace_matrix_scaling != 0.0)
-              integrator.submit_gradient(laplace_matrix_scaling *
-                                           integrator.get_gradient(q),
-                                         q);
-          }
-
-        // integrate
-        if (mass_matrix_scaling != 0.0 && laplace_matrix_scaling != 0.0)
-          integrator.integrate(EvaluationFlags::values |
-                               EvaluationFlags::gradients);
-        else if (mass_matrix_scaling != 0.0)
-          integrator.integrate(EvaluationFlags::values);
-        else if (laplace_matrix_scaling != 0.0)
-          integrator.integrate(EvaluationFlags::gradients);
+        do_cell_integral_local(integrator);
 
         // scatter
         integrator.distribute_local_to_global(dst);
       }
+  }
+
+  void
+  do_cell_integral_local(FECellIntegrator &integrator) const
+  {
+    // evaluate
+    if (mass_matrix_scaling != 0.0 && laplace_matrix_scaling != 0.0)
+      integrator.evaluate(EvaluationFlags::values | EvaluationFlags::gradients);
+    else if (mass_matrix_scaling != 0.0)
+      integrator.evaluate(EvaluationFlags::values);
+    else if (laplace_matrix_scaling != 0.0)
+      integrator.evaluate(EvaluationFlags::gradients);
+
+    // quadrature
+    for (unsigned int q = 0; q < integrator.n_q_points; ++q)
+      {
+        if (mass_matrix_scaling != 0.0)
+          integrator.submit_value(mass_matrix_scaling * integrator.get_value(q),
+                                  q);
+        if (laplace_matrix_scaling != 0.0)
+          integrator.submit_gradient(laplace_matrix_scaling *
+                                       integrator.get_gradient(q),
+                                     q);
+      }
+
+    // integrate
+    if (mass_matrix_scaling != 0.0 && laplace_matrix_scaling != 0.0)
+      integrator.integrate(EvaluationFlags::values |
+                           EvaluationFlags::gradients);
+    else if (mass_matrix_scaling != 0.0)
+      integrator.integrate(EvaluationFlags::values);
+    else if (laplace_matrix_scaling != 0.0)
+      integrator.integrate(EvaluationFlags::gradients);
   }
 
   MatrixFree<dim, Number> matrix_free;
@@ -280,20 +295,29 @@ test()
   // create scalar siffness matrix
   SparseMatrix<Number> K;
   K.reinit(sparsity_pattern);
-  MatrixCreator::create_laplace_matrix<dim, dim>(
-    mapping, dof_handler, quad, K, nullptr, constraints);
 
   // create scalar mass matrix
   SparseMatrix<Number> M;
   M.reinit(sparsity_pattern);
-  MatrixCreator::create_mass_matrix<dim, dim>(
-    mapping, dof_handler, quad, M, nullptr, constraints);
 
   // matrix-free operators
   MatrixFreeOperator<dim, Number> K_mf(
     mapping, dof_handler, constraints, quad, 0.0, 1.0);
   MatrixFreeOperator<dim, Number> M_mf(
     mapping, dof_handler, constraints, quad, 1.0, 0.0);
+
+  if (false)
+    {
+      MatrixCreator::create_laplace_matrix<dim, dim>(
+        mapping, dof_handler, quad, K, nullptr, constraints);
+      MatrixCreator::create_mass_matrix<dim, dim>(
+        mapping, dof_handler, quad, M, nullptr, constraints);
+    }
+  else
+    {
+      K_mf.compute_system_matrix(K);
+      M_mf.compute_system_matrix(M);
+    }
 
   FullMatrix<Number> A_inv;
 
