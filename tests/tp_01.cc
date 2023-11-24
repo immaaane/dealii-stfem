@@ -19,7 +19,10 @@
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/matrix_creator.h>
 
+#include "fe_time.h"
+
 using namespace dealii;
+using dealii::numbers::PI;
 
 template <typename Number, typename SystemMatrixType>
 class SystemMatrix
@@ -30,10 +33,12 @@ public:
 
   SystemMatrix(const SystemMatrixType   &K,
                const SystemMatrixType   &M,
-               const FullMatrix<Number> &A_inv)
+               const FullMatrix<Number> &Alpha_,
+               const FullMatrix<Number> &Beta_)
     : K(K)
     , M(M)
-    , A_inv(A_inv)
+    , Alpha(Alpha_)
+    , Beta(Beta_)
   {}
 
   void
@@ -44,21 +49,27 @@ public:
     VectorType tmp;
     tmp.reinit(src.block(0));
     for (unsigned int i = 0; i < n_blocks; ++i)
-      K.vmult(dst.block(i), src.block(i));
+      {
+        K.vmult(tmp, src.block(i));
+
+        for (unsigned int j = 0; j < n_blocks; ++j)
+          dst.block(j).add(Alpha(j, i), tmp);
+      }
 
     for (unsigned int i = 0; i < n_blocks; ++i)
       {
         M.vmult(tmp, src.block(i));
 
         for (unsigned int j = 0; j < n_blocks; ++j)
-          dst.block(j).add(A_inv(j, i), tmp);
+          dst.block(j).add(Beta(j, i), tmp);
       }
   }
 
 private:
   const SystemMatrixType   &K;
   const SystemMatrixType   &M;
-  const FullMatrix<Number> &A_inv;
+  const FullMatrix<Number> &Alpha;
+  const FullMatrix<Number> &Beta;
 };
 
 
@@ -73,18 +84,21 @@ public:
   template <int dim>
   Preconditioner(const SparseMatrix<Number> &K,
                  const SparseMatrix<Number> &M,
-                 const FullMatrix<Number>   &A_inv,
+                 const FullMatrix<Number>   &Alpha,
+                 const FullMatrix<Number>   &Beta,
                  const DoFHandler<dim>      &dof_handler)
+    : valence(dof_handler.n_dofs())
   {
     for (const auto &cell : dof_handler.active_cell_iterators())
       {
         std::vector<types::global_dof_index> my_indices(
           cell->get_fe().n_dofs_per_cell());
         cell->get_dof_indices(my_indices);
+        for (auto const &dof_index : my_indices)
+          valence(dof_index) += static_cast<Number>(1);
 
         indices.emplace_back(my_indices);
       }
-
     std::vector<FullMatrix<Number>> K_blocks, M_blocks;
 
     SparseMatrixTools::restrict_to_full_matrices(K,
@@ -104,14 +118,14 @@ public:
         const auto &M = M_blocks[i];
         auto       &B = blocks[i];
 
-        B = FullMatrix<Number>(K.m() * A_inv.m(), K.n() * A_inv.n());
+        B = FullMatrix<Number>(K.m() * Alpha.m(), K.n() * Alpha.n());
 
-        for (unsigned int i = 0; i < A_inv.m(); ++i)
-          for (unsigned int j = 0; j < A_inv.n(); ++j)
+        for (unsigned int i = 0; i < Alpha.m(); ++i)
+          for (unsigned int j = 0; j < Alpha.n(); ++j)
             for (unsigned int k = 0; k < K.m(); ++k)
               for (unsigned int l = 0; l < K.n(); ++l)
                 B(k + i * K.m(), l + j * K.n()) =
-                  A_inv(i, j) * M(k, l) + ((i == j) ? K(k, l) : 0.0);
+                  Beta(i, j) * M(k, l) + Alpha(i, j) * K(k, l);
 
         B.gauss_jordan();
       }
@@ -140,17 +154,20 @@ public:
         // patch solver
         blocks[i].vmult(dst_local, src_local);
 
-        // TODO: weight!!!!!!!
-
         // scatter
         for (unsigned int b = 0, c = 0; b < n_blocks; ++b)
           for (unsigned int j = 0; j < indices[i].size(); ++j, ++c)
-            dst.block(b)[indices[i][j]] += dst_local[c];
+            { // TODO: weight before or after for better perf?
+              Number const weight =
+                static_cast<Number>(1) / valence[indices[i][j]];
+              dst.block(b)[indices[i][j]] += weight * dst_local[c];
+            }
       }
   }
 
 private:
   std::vector<std::vector<types::global_dof_index>> indices;
+  VectorType                                        valence;
   std::vector<FullMatrix<Number>>                   blocks;
 };
 
@@ -261,6 +278,61 @@ private:
 };
 
 
+template <int dim, typename Number>
+class ExactSolution : Function<dim, Number>
+{
+public:
+  ExactSolution(double f_ = 1.0)
+    : Function<dim, Number>()
+    , f(f_)
+  {}
+
+  double
+  value(Point<dim> const &x, unsigned int const) const override final
+  {
+    Number value = sin(2 * PI * f * this->get_time());
+    for (unsigned int i = 0; i < dim; ++i)
+      value *= sin(2 * PI * f * x[i]);
+    return value;
+  }
+  Tensor<1, dim>
+  gradient(const dealii::Point<dim> &x, const unsigned int) const override final
+  {
+    Tensor<1, dim> grad;
+    for (unsigned int i = 0; i < dim; ++i)
+      {
+        grad[i] = 2 * PI * f * sin(2 * PI * f * this->get_time());
+        for (unsigned int j = 0; j < dim; ++j)
+          grad[i] *= (i == j ? cos(2 * PI * f * x[j]) : sin(2 * PI * f * x[j]));
+      }
+    return grad;
+  }
+
+private:
+  double const f;
+};
+
+template <int dim, typename Number>
+class RHSFunction : Function<dim, Number>
+{
+public:
+  RHSFunction(double f_ = 1.0)
+    : Function<dim, Number>()
+    , f(f_)
+  {}
+
+  double
+  value(Point<dim> const &x, unsigned int const) const override final
+  {
+    Number value = 2 * PI * f * cos(2 * PI * f * this->get_time());
+    for (unsigned int i = 0; i < dim; ++i)
+      value *= sin(2 * PI * f * x[i]);
+    return value;
+  }
+
+private:
+  double const f;
+};
 
 template <int dim>
 void
@@ -319,13 +391,19 @@ test()
       M_mf.compute_system_matrix(M);
     }
 
-  FullMatrix<Number> A_inv;
+  Number      frequency = 1.0;
+  std::string type{"DG"};
+  auto const [Alpha, Beta, Gamma, Zeta] =
+    get_fe_time_weights<Number>("DG", fe_degree);
 
   BlockVectorType x(n_blocks);
   for (unsigned int i = 0; i < n_blocks; ++i)
     x.block(i).reinit(dof_handler.n_dofs());
 
-  BlockVectorType rhs(n_blocks);
+  BlockVectorType            rhs(n_blocks);
+  RHSFunction<dim, Number>   rhs_function(frequency);
+  ExactSolution<dim, Number> exact_solution(frequency);
+
   for (unsigned int i = 0; i < n_blocks; ++i)
     rhs.block(i).reinit(dof_handler.n_dofs());
 
@@ -334,8 +412,9 @@ test()
 
   SystemMatrix<Number, MatrixFreeOperator<dim, Number>> matrix(K_mf,
                                                                M_mf,
-                                                               A_inv);
-  Preconditioner<Number> preconditioner(K, M, A_inv, dof_handler);
+                                                               Alpha,
+                                                               Beta);
+  Preconditioner<Number> preconditioner(K, M, Alpha, Beta, dof_handler);
 
   solver.solve(matrix, x, rhs, preconditioner);
 
