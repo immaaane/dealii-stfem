@@ -26,9 +26,9 @@ print_formatted(const FullMatrix<T> &matrix)
 }
 
 void
-test(const std::string type, const unsigned int r)
+test(TimeStepType type, const unsigned int r)
 {
-  if (type == "CG")
+  if (type == TimeStepType::CGP)
     { // CG
       using Number = double;
 
@@ -39,7 +39,7 @@ test(const std::string type, const unsigned int r)
       print_formatted(full_matrix_der);
     }
 
-  if (type == "DG")
+  if (type == TimeStepType::DG)
     { // DG
       using Number = double;
 
@@ -55,8 +55,8 @@ test(const std::string type, const unsigned int r)
 int
 main()
 {
-  test("CG", 1);
-  test("CG", 2);
-  test("DG", 1);
-  test("DG", 2);
+  test(TimeStepType::CGP, 1);
+  test(TimeStepType::CGP, 2);
+  test(TimeStepType::DG, 1);
+  test(TimeStepType::DG, 2);
 }

@@ -277,6 +277,132 @@ private:
   double laplace_matrix_scaling;
 };
 
+template <int dim, typename Number>
+class ErrorCalculator
+{
+public:
+  using VectorType      = Vector<Number>;
+  using BlockVectorType = BlockVector<Number>;
+
+  ErrorCalculator(TimeStepType           type_,
+                  unsigned int           time_order,
+                  unsigned int           space_order,
+                  Mapping<dim> const    &mapping,
+                  DoFHandler<dim> const &dof_handler,
+                  std::function<void(const double, VectorType &)>
+                    &const evaluate_exact_solution_,
+                  std::function<void(const double, VectorType &)>
+                    &const evaluate_numerical_solution_)
+    : time_step_type(type_)
+    , quad_cell(space_order + 1)
+    , quad_time(time_order + 1)
+    , evaluate_exact_solution(evaluate_exact_solution_)
+    , evaluate_numerical_solution(evaluate_numerical_solution_)
+  {}
+
+  std::unordored_map<dealii::VectorTools::NormType, double>
+  evaluate_error(const double time,
+                 const double time_step,
+                 BlockVectorType const &)
+  {
+    std::unordored_map<dealii::VectorTools::NormType, double> error;
+
+    double l2, l8, h1, time_;
+    for (unsigned q = 0; q < quad_time.size(); ++q)
+      {
+        ref_t = tq[q][0];
+        time_ = time + ref_t * time_step;
+
+        error[dealii::VectorTools::L2_norm] += l2;
+        error[dealii::VectorTools::Linfty_norm] += l8;
+        error[dealii::VectorTools::H1_norm] += h1;
+      }
+  }
+
+private:
+  TimeStepType           time_step_type;
+  QGauss<dim> const      quad_cell;
+  QGauss<dim> const      quad_time;
+  const Mapping<dim>    &mapping;
+  const DoFHandler<dim> &dof_handler;
+  std::function<void(const double, VectorType &)>
+    &const evaluate_exact_solution;
+  std::function<void(const double, VectorType &)>
+    &const evaluate_numerical_solution;
+};
+
+template <int dim, typename Number>
+class time_step
+{
+public:
+  using VectorType      = Vector<Number>;
+  using BlockVectorType = BlockVector<Number>;
+
+  time_step(
+    TimeStepType       type_,
+    unsigned const int time_order_,
+    double const       gmres_tolerance_,
+    std::function<void(const double, VectorType &)> const
+      &integrate_rhs_function,
+    std::function<void(const double, VectorType &)> const &evaluate_solution)
+    : time_step_type(type_)
+    , time_order(time_order_)
+    , solver_control(100, 1.e-16, gmres_tolerance_)
+    , solver(solver_control)
+  {
+    {
+      auto const [Alpha_, Beta_, Gamma_, Zeta_] =
+        get_fe_time_weights<Number>(type, degree);
+      Alpha = Alpha_;
+      Beta  = Beta_;
+      Gamma = Gamma_;
+      Zeta  = Zeta_;
+    }
+    this->matrix = SystemMatrix<Number, MatrixFreeOperator<dim, Number>>(K_mf,
+                                                                         M_mf,
+                                                                         Alpha,
+                                                                         Beta);
+    this->preconditioner =
+      Preconditioner<Number>(K, M, Alpha, Beta, dof_handler);
+  }
+
+  void
+  solve(BlockVectorType   &solution,
+        const unsigned int timestep_number,
+        const double       time,
+        const double       time_step)
+  {
+    BlockVectorType rhs(n_blocks);
+    for (unsigned int i = 0; i < n_blocks; ++i)
+      rhs.block(i).reinit(dof_handler.n_dofs());
+
+    integrate_rhs_function(time, rhs);
+    try
+      {
+        solver.solve(matrix, x, rhs, preconditioner);
+      }
+    catch (const SolverControl::NoConvergence &e)
+      {
+        AssertThrow(false, ExcMessage(e.what()));
+      }
+  }
+
+
+private:
+  TimeStepType       time_step_type;
+  unsigned int       time_order;
+  FullMatrix<Number> Alpha;
+  FullMatrix<Number> Beta;
+  FullMatrix<Number> Gamma;
+  FullMatrix<Number> Zeta;
+
+  ReductionControl                                      solver_control;
+  SolverGMRES<BlockVectorType>                          solver;
+  Preconditioner<Number>                                preconditioner;
+  SystemMatrix<Number, MatrixFreeOperator<dim, Number>> matrix;
+
+  std::function<void(const double, VectorType &)> const integrate_rhs_function;
+};
 
 template <int dim, typename Number>
 class ExactSolution : Function<dim, Number>
@@ -391,8 +517,27 @@ test()
       M_mf.compute_system_matrix(M);
     }
 
-  Number      frequency = 1.0;
-  std::string type{"DG"};
+  Number                     frequency = 1.0;
+  RHSFunction<dim, Number>   rhs_function(frequency);
+  ExactSolution<dim, Number> exact_solution(frequency);
+
+  const auto integrate_rhs_function =
+    [&dof_handler, &quad, &rhs_function, &constraints](const double time,
+                                                       VectorType  &tmp) {
+      rhs_function.set_time(time);
+      VectorTools::create_right_hand_side(
+        dof_handler, quad, rhs_function, tmp, constraints);
+    };
+  const auto evaluate_exact_solution =
+    [&dof_handler, &quad, &exact_solution, &constraints](const double time,
+                                                         VectorType  &tmp) {
+      exact_solution.set_time(time);
+      VectorTools::interpolate(
+        dof_handler, quad, exact_solution, tmp, constraints);
+    };
+
+
+  TimeStepType type = TimeStepType::DG;
   auto const [Alpha, Beta, Gamma, Zeta] =
     get_fe_time_weights<Number>("DG", fe_degree);
 
@@ -400,23 +545,20 @@ test()
   for (unsigned int i = 0; i < n_blocks; ++i)
     x.block(i).reinit(dof_handler.n_dofs());
 
-  BlockVectorType            rhs(n_blocks);
-  RHSFunction<dim, Number>   rhs_function(frequency);
-  ExactSolution<dim, Number> exact_solution(frequency);
+  ErrorCalculator<dim, Number> error_calculator(type,
+                                                fe_degree,
+                                                fe_degree,
+                                                mapping,
+                                                dof_handler,
+                                                evaluate_exact_solution,
+                                                integrate_rhs_function);
 
-  for (unsigned int i = 0; i < n_blocks; ++i)
-    rhs.block(i).reinit(dof_handler.n_dofs());
+  time_step<dim, Number> step(type, fe_degree, 1.e-12);
 
-  SolverControl                solver_control;
-  SolverGMRES<BlockVectorType> solver(solver_control);
 
-  SystemMatrix<Number, MatrixFreeOperator<dim, Number>> matrix(K_mf,
-                                                               M_mf,
-                                                               Alpha,
-                                                               Beta);
-  Preconditioner<Number> preconditioner(K, M, Alpha, Beta, dof_handler);
+  step.solve(x, 0, 0.0, 1.0, integrate_rhs_function);
+  error_calculator.evaluate_error(0, 1.0, x);
 
-  solver.solve(matrix, x, rhs, preconditioner);
 
   DataOut<dim> data_out;
 }

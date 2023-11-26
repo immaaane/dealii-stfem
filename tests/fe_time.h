@@ -7,6 +7,13 @@
 #include <array>
 
 
+enum class TimeStepType : unsigned int
+{
+  CGP = 1,
+  DG  = 2,
+  GCC = 3
+};
+
 namespace dealii
 {
   template <typename Number>
@@ -42,13 +49,13 @@ namespace dealii
    */
   template <typename Number>
   std::array<FullMatrix<Number>, 4>
-  get_fe_time_weights(std::string const &type, unsigned int const r)
+  get_fe_time_weights(TimeStepType type, unsigned int const r)
   {
-    if (type == "CG")
+    if (type == TimeStepType::CGP)
       {
         return split_lhs_rhs(get_cg_weights<Number>(r));
       }
-    else if (type == "DG")
+    else if (type == TimeStepType::DG)
       {
         return split_lhs_rhs(get_dg_weights<Number>(r));
       }
