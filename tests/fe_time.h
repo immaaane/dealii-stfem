@@ -59,7 +59,29 @@ namespace dealii
       {
         return split_lhs_rhs(get_dg_weights<Number>(r));
       }
+    return {{FullMatrix<Number>(),
+             FullMatrix<Number>(),
+             FullMatrix<Number>(),
+             FullMatrix<Number>()}};
   }
+
+  template <typename Number>
+  std::vector<Polynomials::Polynomial<Number>>
+  get_time_basis(TimeStepType type, unsigned int const r)
+  {
+    if (type == TimeStepType::CGP)
+      {
+        return Polynomials::generate_complete_Lagrange_basis(
+          QGaussLobatto<1>(r + 1).get_points());
+      }
+    else if (type == TimeStepType::DG)
+      {
+        return Polynomials::generate_complete_Lagrange_basis(
+          QGaussRadau<1>(r + 1, QGaussRadau<1>::EndPoint::right).get_points());
+      }
+    return {{}};
+  }
+
 
   /** Utility function for splitting the weights into parts belonging to the RHS
    * and LHS.
@@ -100,8 +122,8 @@ namespace dealii
     // DG
     return {{time_weights[0],
              time_weights[1],
-             time_weights[3],
-             FullMatrix<Number>(time_weights[3].m(), 1)}};
+             time_weights[2],
+             FullMatrix<Number>(time_weights[2].m(), 1)}};
   }
 
   template <typename Number>
@@ -112,8 +134,7 @@ namespace dealii
     std::vector<Point<1>> const test_points(trial_points.begin() + 1,
                                             trial_points.end());
 
-    auto const poly_lobatto =
-      Polynomials::generate_complete_Lagrange_basis(trial_points);
+    auto const poly_lobatto = get_time_basis<Number>(TimeStepType::CGP, r);
     auto const poly_test =
       Polynomials::generate_complete_Lagrange_basis(test_points);
 
@@ -151,8 +172,7 @@ namespace dealii
   get_dg_weights(unsigned int const r)
   {
     // Radau quadrature
-    auto const poly_radau = Polynomials::generate_complete_Lagrange_basis(
-      QGaussRadau<1>(r + 1, QGaussRadau<1>::EndPoint::right).get_points());
+    auto const poly_radau = get_time_basis<Number>(TimeStepType::DG, r);
 
     std::vector<Polynomials::Polynomial<double>> poly_radau_derivative(
       poly_radau.size());
