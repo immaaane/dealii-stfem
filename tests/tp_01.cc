@@ -18,11 +18,68 @@
 
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/matrix_creator.h>
+#include <deal.II/numerics/vector_tools.h>
 
 #include "fe_time.h"
 
 using namespace dealii;
 using dealii::numbers::PI;
+
+template <int dim, typename Number>
+class ExactSolution : public Function<dim, Number>
+{
+public:
+  ExactSolution(double f_ = 1.0)
+    : Function<dim, Number>()
+    , f(f_)
+  {}
+
+  double
+  value(Point<dim> const &x, unsigned int const) const override final
+  {
+    Number value = sin(2 * PI * f * this->get_time());
+    for (unsigned int i = 0; i < dim; ++i)
+      value *= sin(2 * PI * f * x[i]);
+    return value;
+  }
+  Tensor<1, dim>
+  gradient(const Point<dim> &x, const unsigned int) const override final
+  {
+    Tensor<1, dim> grad;
+    for (unsigned int i = 0; i < dim; ++i)
+      {
+        grad[i] = 2 * PI * f * sin(2 * PI * f * this->get_time());
+        for (unsigned int j = 0; j < dim; ++j)
+          grad[i] *= (i == j ? cos(2 * PI * f * x[j]) : sin(2 * PI * f * x[j]));
+      }
+    return grad;
+  }
+
+private:
+  double const f;
+};
+
+template <int dim, typename Number>
+class RHSFunction : public Function<dim, Number>
+{
+public:
+  RHSFunction(double f_ = 1.0)
+    : Function<dim, Number>()
+    , f(f_)
+  {}
+
+  double
+  value(Point<dim> const &x, unsigned int const) const override final
+  {
+    Number value = 2 * PI * f * cos(2 * PI * f * this->get_time());
+    for (unsigned int i = 0; i < dim; ++i)
+      value *= sin(2 * PI * f * x[i]);
+    return value;
+  }
+
+private:
+  double const f;
+};
 
 template <typename Number, typename SystemMatrixType>
 class SystemMatrix
@@ -284,97 +341,130 @@ public:
   using VectorType      = Vector<Number>;
   using BlockVectorType = BlockVector<Number>;
 
-  ErrorCalculator(TimeStepType           type_,
-                  unsigned int           time_order,
-                  unsigned int           space_order,
-                  Mapping<dim> const    &mapping,
-                  DoFHandler<dim> const &dof_handler,
+  ErrorCalculator(TimeStepType               type_,
+                  unsigned int               time_degree,
+                  unsigned int               space_order,
+                  Mapping<dim> const        &mapping_,
+                  DoFHandler<dim> const     &dof_handler_,
+                  ExactSolution<dim, Number> exact_solution_,
                   std::function<void(const double, VectorType &)>
-                    &const evaluate_exact_solution_,
-                  std::function<void(const double, VectorType &)>
-                    &const evaluate_numerical_solution_)
+                    evaluate_numerical_solution_)
     : time_step_type(type_)
     , quad_cell(space_order + 1)
-    , quad_time(time_order + 1)
-    , evaluate_exact_solution(evaluate_exact_solution_)
+    , quad_time(time_degree + 1)
+    , mapping(mapping_)
+    , dof_handler(dof_handler_)
+    , exact_solution(exact_solution_)
     , evaluate_numerical_solution(evaluate_numerical_solution_)
   {}
 
-  std::unordored_map<dealii::VectorTools::NormType, double>
+  std::unordered_map<VectorTools::NormType, double>
   evaluate_error(const double time,
                  const double time_step,
-                 BlockVectorType const &)
+                 BlockVectorType const &) const
   {
-    std::unordored_map<dealii::VectorTools::NormType, double> error;
+    std::unordered_map<VectorTools::NormType, double> error;
+    auto const &tq = quad_time.get_points();
+    auto const &tw = quad_time.get_weights();
 
-    double l2, l8, h1, time_;
+    VectorType     numeric(dof_handler.n_dofs());
+    Vector<double> differences_per_cell(
+      dof_handler.get_triangulation().n_active_cells());
+
+    error[VectorTools::L2_norm]     = 0.0;
+    error[VectorTools::Linfty_norm] = -1.;
+    error[VectorTools::H1_seminorm] = 0.0;
+
+    double time_, ref_t;
     for (unsigned q = 0; q < quad_time.size(); ++q)
       {
         ref_t = tq[q][0];
         time_ = time + ref_t * time_step;
+        exact_solution.set_time(time_);
+        evaluate_numerical_solution(time_, numeric);
 
-        error[dealii::VectorTools::L2_norm] += l2;
-        error[dealii::VectorTools::Linfty_norm] += l8;
-        error[dealii::VectorTools::H1_norm] += h1;
+        dealii::VectorTools::integrate_difference(mapping,
+                                                  dof_handler,
+                                                  numeric,
+                                                  exact_solution,
+                                                  differences_per_cell,
+                                                  quad_cell,
+                                                  dealii::VectorTools::L2_norm);
+        double l2 = dealii::VectorTools::compute_global_error(
+          dof_handler.get_triangulation(),
+          differences_per_cell,
+          dealii::VectorTools::L2_norm);
+        error[VectorTools::L2_norm] += time_step * tw[q] * l2 * l2;
+
+        dealii::VectorTools::integrate_difference(
+          mapping,
+          dof_handler,
+          numeric,
+          exact_solution,
+          differences_per_cell,
+          quad_cell,
+          dealii::VectorTools::Linfty_norm);
+        double l8 = dealii::VectorTools::compute_global_error(
+          dof_handler.get_triangulation(),
+          differences_per_cell,
+          dealii::VectorTools::Linfty_norm);
+        error[VectorTools::Linfty_norm] =
+          std::max(l8, error[VectorTools::Linfty_norm]);
+
+        dealii::VectorTools::integrate_difference(
+          mapping,
+          dof_handler,
+          numeric,
+          exact_solution,
+          differences_per_cell,
+          quad_cell,
+          dealii::VectorTools::H1_seminorm);
+        double h1 = dealii::VectorTools::compute_global_error(
+          dof_handler.get_triangulation(),
+          differences_per_cell,
+          dealii::VectorTools::H1_seminorm);
+        error[VectorTools::H1_seminorm] += time_step * tw[q] * h1 * h1;
       }
+    return error;
   }
 
 private:
-  TimeStepType           time_step_type;
-  QGauss<dim> const      quad_cell;
-  QGauss<dim> const      quad_time;
-  const Mapping<dim>    &mapping;
-  const DoFHandler<dim> &dof_handler;
-  std::function<void(const double, VectorType &)>
-    &const evaluate_exact_solution;
-  std::function<void(const double, VectorType &)>
-    &const evaluate_numerical_solution;
+  TimeStepType                                    time_step_type;
+  QGauss<dim> const                               quad_cell;
+  QGauss<dim> const                               quad_time;
+  const Mapping<dim>                             &mapping;
+  const DoFHandler<dim>                          &dof_handler;
+  mutable ExactSolution<dim, Number>              exact_solution;
+  std::function<void(const double, VectorType &)> evaluate_numerical_solution;
 };
 
 template <int dim, typename Number>
-class time_step
+class TimeIntegrator
 {
 public:
   using VectorType      = Vector<Number>;
   using BlockVectorType = BlockVector<Number>;
 
-  time_step(
-    TimeStepType       type_,
-    unsigned const int time_order_,
-    double const       gmres_tolerance_,
-    std::function<void(const double, VectorType &)> const
-      &integrate_rhs_function,
-    std::function<void(const double, VectorType &)> const &evaluate_solution)
-    : time_step_type(type_)
-    , time_order(time_order_)
-    , solver_control(100, 1.e-16, gmres_tolerance_)
+  TimeIntegrator(
+    double const gmres_tolerance_,
+    SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix_,
+    Preconditioner<Number> const                        &preconditioner_,
+    std::function<void(const double, BlockVectorType &)> integrate_rhs_function)
+    : solver_control(100, 1.e-16, gmres_tolerance_)
     , solver(solver_control)
-  {
-    {
-      auto const [Alpha_, Beta_, Gamma_, Zeta_] =
-        get_fe_time_weights<Number>(type, degree);
-      Alpha = Alpha_;
-      Beta  = Beta_;
-      Gamma = Gamma_;
-      Zeta  = Zeta_;
-    }
-    this->matrix = SystemMatrix<Number, MatrixFreeOperator<dim, Number>>(K_mf,
-                                                                         M_mf,
-                                                                         Alpha,
-                                                                         Beta);
-    this->preconditioner =
-      Preconditioner<Number>(K, M, Alpha, Beta, dof_handler);
-  }
+    , preconditioner(preconditioner_)
+    , matrix(matrix_)
+    , integrate_rhs_function(integrate_rhs_function)
+  {}
 
   void
-  solve(BlockVectorType   &solution,
-        const unsigned int timestep_number,
-        const double       time,
-        const double       time_step)
+  solve(BlockVectorType                    &x,
+        [[maybe_unused]] const unsigned int timestep_number,
+        const double                        time,
+        [[maybe_unused]] const double       time_step) const
   {
-    BlockVectorType rhs(n_blocks);
-    for (unsigned int i = 0; i < n_blocks; ++i)
-      rhs.block(i).reinit(dof_handler.n_dofs());
+    BlockVectorType rhs(x);
+    rhs = 0.;
 
     integrate_rhs_function(time, rhs);
     try
@@ -389,75 +479,12 @@ public:
 
 
 private:
-  TimeStepType       time_step_type;
-  unsigned int       time_order;
-  FullMatrix<Number> Alpha;
-  FullMatrix<Number> Beta;
-  FullMatrix<Number> Gamma;
-  FullMatrix<Number> Zeta;
+  mutable ReductionControl                                     solver_control;
+  mutable SolverGMRES<BlockVectorType>                         solver;
+  Preconditioner<Number> const                                &preconditioner;
+  SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix;
 
-  ReductionControl                                      solver_control;
-  SolverGMRES<BlockVectorType>                          solver;
-  Preconditioner<Number>                                preconditioner;
-  SystemMatrix<Number, MatrixFreeOperator<dim, Number>> matrix;
-
-  std::function<void(const double, VectorType &)> const integrate_rhs_function;
-};
-
-template <int dim, typename Number>
-class ExactSolution : Function<dim, Number>
-{
-public:
-  ExactSolution(double f_ = 1.0)
-    : Function<dim, Number>()
-    , f(f_)
-  {}
-
-  double
-  value(Point<dim> const &x, unsigned int const) const override final
-  {
-    Number value = sin(2 * PI * f * this->get_time());
-    for (unsigned int i = 0; i < dim; ++i)
-      value *= sin(2 * PI * f * x[i]);
-    return value;
-  }
-  Tensor<1, dim>
-  gradient(const dealii::Point<dim> &x, const unsigned int) const override final
-  {
-    Tensor<1, dim> grad;
-    for (unsigned int i = 0; i < dim; ++i)
-      {
-        grad[i] = 2 * PI * f * sin(2 * PI * f * this->get_time());
-        for (unsigned int j = 0; j < dim; ++j)
-          grad[i] *= (i == j ? cos(2 * PI * f * x[j]) : sin(2 * PI * f * x[j]));
-      }
-    return grad;
-  }
-
-private:
-  double const f;
-};
-
-template <int dim, typename Number>
-class RHSFunction : Function<dim, Number>
-{
-public:
-  RHSFunction(double f_ = 1.0)
-    : Function<dim, Number>()
-    , f(f_)
-  {}
-
-  double
-  value(Point<dim> const &x, unsigned int const) const override final
-  {
-    Number value = 2 * PI * f * cos(2 * PI * f * this->get_time());
-    for (unsigned int i = 0; i < dim; ++i)
-      value *= sin(2 * PI * f * x[i]);
-    return value;
-  }
-
-private:
-  double const f;
+  std::function<void(const double, BlockVectorType &)> integrate_rhs_function;
 };
 
 template <int dim>
@@ -466,9 +493,13 @@ test()
 {
   using Number          = double;
   using BlockVectorType = BlockVector<Number>;
+  using VectorType      = Vector<Number>;
+
+  TimeStepType type = TimeStepType::DG;
 
   const unsigned int fe_degree = 2;
-  const unsigned int n_blocks  = 3;
+  const unsigned int n_blocks =
+    type == TimeStepType::DG ? fe_degree + 1 : fe_degree;
 
   MappingQ1<dim> mapping;
 
@@ -477,7 +508,7 @@ test()
 
   Triangulation<dim> tria;
   GridGenerator::hyper_cube(tria);
-  tria.refine_global(4);
+  tria.refine_global(1);
 
   DoFHandler<dim> dof_handler(tria);
   dof_handler.distribute_dofs(fe);
@@ -517,50 +548,79 @@ test()
       M_mf.compute_system_matrix(M);
     }
 
+  auto const [Alpha, Beta, Gamma, Zeta] =
+    get_fe_time_weights<Number>(type, fe_degree);
+
+  SystemMatrix<Number, MatrixFreeOperator<dim, Number>> matrix(K_mf,
+                                                               M_mf,
+                                                               Alpha,
+                                                               Beta);
+
+  Preconditioner<Number> preconditioner(K, M, Alpha, Beta, dof_handler);
+
+
   Number                     frequency = 1.0;
   RHSFunction<dim, Number>   rhs_function(frequency);
   ExactSolution<dim, Number> exact_solution(frequency);
 
-  const auto integrate_rhs_function =
-    [&dof_handler, &quad, &rhs_function, &constraints](const double time,
-                                                       VectorType  &tmp) {
-      rhs_function.set_time(time);
-      VectorTools::create_right_hand_side(
-        dof_handler, quad, rhs_function, tmp, constraints);
-    };
-  const auto evaluate_exact_solution =
-    [&dof_handler, &quad, &exact_solution, &constraints](const double time,
-                                                         VectorType  &tmp) {
-      exact_solution.set_time(time);
-      VectorTools::interpolate(
-        dof_handler, quad, exact_solution, tmp, constraints);
-    };
-
-
-  TimeStepType type = TimeStepType::DG;
-  auto const [Alpha, Beta, Gamma, Zeta] =
-    get_fe_time_weights<Number>("DG", fe_degree);
+  auto integrate_rhs_function =
+    [&mapping, &dof_handler, &quad, &rhs_function, &constraints](
+      const double time, BlockVectorType &tmp) -> void {
+    rhs_function.set_time(time);
+    VectorTools::create_right_hand_side(
+      mapping, dof_handler, quad, rhs_function, tmp, constraints);
+  };
+  [[maybe_unused]] auto evaluate_exact_solution =
+    [&mapping, &dof_handler, &exact_solution](const double time,
+                                              VectorType  &tmp) -> void {
+    exact_solution.set_time(time);
+    VectorTools::interpolate(mapping, dof_handler, exact_solution, tmp);
+  };
+  auto evaluate_numerical_solution =
+    [&mapping, &dof_handler, &quad, &exact_solution, &constraints](
+      const double time, VectorType &tmp) -> void {
+    (void)time;
+    tmp = 0.;
+  };
 
   BlockVectorType x(n_blocks);
   for (unsigned int i = 0; i < n_blocks; ++i)
     x.block(i).reinit(dof_handler.n_dofs());
 
+  double time           = 0.;
+  double time_step_size = 1.;
+  double end_time       = 1.;
+  double l2 = 0., l8 = -1., h1_semi = 0.;
+
+  unsigned int                 timestep_number = 0;
   ErrorCalculator<dim, Number> error_calculator(type,
                                                 fe_degree,
                                                 fe_degree,
                                                 mapping,
                                                 dof_handler,
-                                                evaluate_exact_solution,
-                                                integrate_rhs_function);
+                                                exact_solution,
+                                                evaluate_numerical_solution);
 
-  time_step<dim, Number> step(type, fe_degree, 1.e-12);
+  TimeIntegrator<dim, Number> step(1.e-12,
+                                   matrix,
+                                   preconditioner,
+                                   integrate_rhs_function);
 
 
-  step.solve(x, 0, 0.0, 1.0, integrate_rhs_function);
-  error_calculator.evaluate_error(0, 1.0, x);
+  while (time > end_time + 0.5 * time_step_size)
+    {
+      time += time_step_size;
+      ++timestep_number;
 
+      step.solve(x, timestep_number, time, time_step_size);
+      constraints.distribute(x);
 
-  DataOut<dim> data_out;
+      auto error_on_In = error_calculator.evaluate_error(0, 1.0, x);
+      l2 += error_on_In[VectorTools::L2_norm];
+      l8 = std::max(error_on_In[VectorTools::Linfty_norm], l8);
+      h1_semi += error_on_In[VectorTools::H1_seminorm];
+      DataOut<dim> data_out;
+    }
 }
 
 
