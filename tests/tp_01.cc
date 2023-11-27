@@ -343,14 +343,14 @@ public:
 
   ErrorCalculator(TimeStepType               type_,
                   unsigned int               time_degree,
-                  unsigned int               space_order,
+                  unsigned int               space_degree,
                   Mapping<dim> const        &mapping_,
                   DoFHandler<dim> const     &dof_handler_,
                   ExactSolution<dim, Number> exact_solution_,
                   std::function<void(const double, VectorType &)>
                     evaluate_numerical_solution_)
     : time_step_type(type_)
-    , quad_cell(space_order + 1)
+    , quad_cell(space_degree + 1)
     , quad_time(time_degree + 1)
     , mapping(mapping_)
     , dof_handler(dof_handler_)
