@@ -72,7 +72,8 @@ public:
   double
   value(Point<dim> const &x, unsigned int const) const override final
   {
-    Number value = 2 * PI * f * cos(2 * PI * f * this->get_time());
+    Number value = 8 * PI * PI * f * f * sin(2 * PI * f * this->get_time()) +
+                   2 * PI * f * cos(2 * PI * f * this->get_time());
     for (unsigned int i = 0; i < dim; ++i)
       value *= sin(2 * PI * f * x[i]);
     return value;
@@ -131,7 +132,6 @@ private:
 };
 
 
-
 template <typename Number>
 class Preconditioner
 {
@@ -188,7 +188,6 @@ public:
         B.gauss_jordan();
       }
   }
-
   void
   vmult(BlockVectorType &dst, const BlockVectorType &src) const
   {
@@ -216,14 +215,14 @@ public:
         for (unsigned int b = 0, c = 0; b < n_blocks; ++b)
           for (unsigned int j = 0; j < indices[i].size(); ++j, ++c)
             { // TODO: weight before or after for better perf?
-              Number const weight =
-                static_cast<Number>(1) / valence[indices[i][j]];
+              Number const weight = damp / valence[indices[i][j]];
               dst.block(b)[indices[i][j]] += weight * dst_local[c];
             }
       }
   }
 
 private:
+  Number                                            damp = 1;
   std::vector<std::vector<types::global_dof_index>> indices;
   VectorType                                        valence;
   std::vector<FullMatrix<Number>>                   blocks;
@@ -376,11 +375,10 @@ public:
     Vector<double> differences_per_cell(
       dof_handler.get_triangulation().n_active_cells());
 
-    double time_, ref_t;
+    double time_;
     for (unsigned q = 0; q < quad_time.size(); ++q)
       {
-        ref_t = tq[q][0];
-        time_ = time + ref_t * time_step;
+        time_ = time + tq[q][0] * time_step;
         exact_solution.set_time(time_);
         evaluate_numerical_solution(tq[q][0], numeric, x);
 
@@ -457,8 +455,8 @@ public:
     unsigned int              time_degree_,
     FullMatrix<Number> const &Alpha_,
     FullMatrix<Number> const &Beta_,
-    FullMatrix<Number> const &Zeta_,
     FullMatrix<Number> const &Gamma_,
+    FullMatrix<Number> const &Zeta_,
     double const              gmres_tolerance_,
     SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix_,
     Preconditioner<Number> const                   &preconditioner_,
@@ -488,13 +486,14 @@ public:
 
   void
   solve(BlockVectorType                    &x,
-        BlockVectorType                    &prev_x,
+        VectorType const                   &integrated_x,
         [[maybe_unused]] const unsigned int timestep_number,
         const double                        time,
         [[maybe_unused]] const double       time_step) const
   {
     BlockVectorType rhs(x);
-    VectorType      tmp(x.block(0));
+    rhs = 0.0;
+    VectorType tmp(x.block(0));
 
     for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
       {
@@ -503,16 +502,16 @@ public:
         integrate_rhs_function(time_, tmp);
         for (unsigned int i = 0; i < rhs.n_blocks(); ++i)
           {
-            if (Beta(i, j) != 0.0)
-              rhs.block(i).add(Beta(i, j), tmp);
+            if (Alpha(i, j) != 0.0)
+              rhs.block(i).add(Alpha(i, j), tmp);
           }
       }
     for (unsigned int i = 0; i < rhs.n_blocks(); ++i)
       {
         if (Gamma(i, 0) != 0.0)
-          rhs.block(i).add(Gamma(i, 0), prev_x.block(prev_x.n_blocks() - 1));
+          rhs.block(i).add(Gamma(i, 0), integrated_x);
         if (Zeta(i, 0) != 0.0)
-          rhs.block(i).add(-Zeta(i, 0), prev_x.block(prev_x.n_blocks() - 1));
+          rhs.block(i).add(-Zeta(i, 0), integrated_x);
       }
 
     try
@@ -536,7 +535,7 @@ private:
   FullMatrix<Number> const &Gamma;
 
   mutable ReductionControl                                     solver_control;
-  mutable SolverGMRES<BlockVectorType>                         solver;
+  mutable SolverFGMRES<BlockVectorType>                        solver;
   Preconditioner<Number> const                                &preconditioner;
   SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix;
   std::function<void(const double, VectorType &)> integrate_rhs_function;
@@ -550,185 +549,212 @@ test()
   using BlockVectorType = BlockVector<Number>;
   using VectorType      = Vector<Number>;
 
-  TimeStepType       type      = TimeStepType::DG;
-  const unsigned int fe_degree = 2;
-  const unsigned int n_blocks =
-    type == TimeStepType::DG ? fe_degree + 1 : fe_degree;
-  auto const basis = get_time_basis<Number>(type, fe_degree);
-
-
+  TimeStepType     type = TimeStepType::DG;
   ConvergenceTable table;
-
-  MappingQ1<dim> mapping;
-
-  FE_Q<dim>   fe(fe_degree);
-  QGauss<dim> quad(fe_degree + 1);
-
-  Triangulation<dim> tria;
-  GridGenerator::hyper_cube(tria);
-  tria.refine_global(1);
-
-  DoFHandler<dim> dof_handler(tria);
-  dof_handler.distribute_dofs(fe);
-
-  AffineConstraints<Number> constraints;
-  DoFTools::make_zero_boundary_constraints(dof_handler, constraints);
-  constraints.close();
-
-  // create sparsity pattern
-  SparsityPattern sparsity_pattern(dof_handler.n_dofs(), dof_handler.n_dofs());
-  DoFTools::make_sparsity_pattern(dof_handler, sparsity_pattern, constraints);
-  sparsity_pattern.compress();
-
-  // create scalar siffness matrix
-  SparseMatrix<Number> K;
-  K.reinit(sparsity_pattern);
-
-  // create scalar mass matrix
-  SparseMatrix<Number> M;
-  M.reinit(sparsity_pattern);
-
-  // matrix-free operators
-  MatrixFreeOperator<dim, Number> K_mf(
-    mapping, dof_handler, constraints, quad, 0.0, 1.0);
-  MatrixFreeOperator<dim, Number> M_mf(
-    mapping, dof_handler, constraints, quad, 1.0, 0.0);
-
-  if (false)
-    {
-      MatrixCreator::create_laplace_matrix<dim, dim>(
-        mapping, dof_handler, quad, K, nullptr, constraints);
-      MatrixCreator::create_mass_matrix<dim, dim>(
-        mapping, dof_handler, quad, M, nullptr, constraints);
-    }
-  else
-    {
-      K_mf.compute_system_matrix(K);
-      M_mf.compute_system_matrix(M);
-    }
-
-  double time           = 0.;
-  double time_step_size = 1.0;
-  double end_time       = 1.;
-
-  auto [Alpha, Beta, Gamma, Zeta] =
-    get_fe_time_weights<Number>(type, fe_degree);
-  Beta *= time_step_size;
-
-  SystemMatrix<Number, MatrixFreeOperator<dim, Number>> matrix(K_mf,
-                                                               M_mf,
-                                                               Alpha,
-                                                               Beta);
-
-  Preconditioner<Number> preconditioner(K, M, Alpha, Beta, dof_handler);
+  MappingQ1<dim>   mapping;
 
 
-  Number                     frequency = 1.0;
-  RHSFunction<dim, Number>   rhs_function(frequency);
-  ExactSolution<dim, Number> exact_solution(frequency);
+  auto convergence_test = [&](int const          refinement,
+                              unsigned int const fe_degree) {
+    const unsigned int n_blocks =
+      type == TimeStepType::DG ? fe_degree + 1 : fe_degree;
+    auto const  basis = get_time_basis<Number>(type, fe_degree);
+    FE_Q<dim>   fe(fe_degree);
+    QGauss<dim> quad(fe_degree + 1);
 
-  auto integrate_rhs_function =
-    [&mapping, &dof_handler, &quad, &rhs_function, &constraints, &Beta](
-      const double time, VectorType &rhs) -> void {
-    rhs_function.set_time(time);
-    VectorTools::create_right_hand_side(
-      mapping, dof_handler, quad, rhs_function, rhs, constraints);
-  };
-  [[maybe_unused]] auto evaluate_exact_solution =
-    [&mapping, &dof_handler, &exact_solution](const double time,
-                                              VectorType  &tmp) -> void {
-    exact_solution.set_time(time);
-    VectorTools::interpolate(mapping, dof_handler, exact_solution, tmp);
-  };
-  auto evaluate_numerical_solution =
-    [&mapping, &constraints, &basis, &fe_degree](
-      const double time, VectorType &tmp, BlockVectorType const &x) -> void {
-    int i = 0;
-    for (auto const &el : basis)
+    Triangulation<dim> tria;
+    GridGenerator::hyper_cube(tria);
+    tria.refine_global(refinement);
+
+    DoFHandler<dim> dof_handler(tria);
+    dof_handler.distribute_dofs(fe);
+
+    AffineConstraints<Number> constraints;
+    DoFTools::make_zero_boundary_constraints(dof_handler, constraints);
+    constraints.close();
+
+    // create sparsity pattern
+    SparsityPattern sparsity_pattern(dof_handler.n_dofs(),
+                                     dof_handler.n_dofs());
+    DoFTools::make_sparsity_pattern(dof_handler, sparsity_pattern, constraints);
+    sparsity_pattern.compress();
+
+    // create scalar siffness matrix
+    SparseMatrix<Number> K;
+    K.reinit(sparsity_pattern);
+
+    // create scalar mass matrix
+    SparseMatrix<Number> M;
+    M.reinit(sparsity_pattern);
+
+    double time           = 0.;
+    double time_step_size = 1.0 * pow(2.0, -refinement);
+    double end_time       = 1.;
+
+    // matrix-free operators
+    MatrixFreeOperator<dim, Number> K_mf(
+      mapping, dof_handler, constraints, quad, 0.0, 1.0);
+    MatrixFreeOperator<dim, Number> M_mf(
+      mapping, dof_handler, constraints, quad, 1.0, 0.0);
+
+    if (false)
       {
-        if (double v = el.value(time); v != 0.0)
-          tmp.add(v, x.block(i));
-        ++i;
+        MatrixCreator::create_laplace_matrix<dim, dim>(
+          mapping, dof_handler, quad, K, nullptr, constraints);
+        MatrixCreator::create_mass_matrix<dim, dim>(
+          mapping, dof_handler, quad, M, nullptr, constraints);
       }
-    constraints.distribute(tmp);
+    else
+      {
+        K_mf.compute_system_matrix(K);
+        M_mf.compute_system_matrix(M);
+      }
+
+    auto [Alpha, Beta, Gamma, Zeta] =
+      get_fe_time_weights<Number>(type, fe_degree);
+    Alpha *= time_step_size;
+
+    SystemMatrix<Number, MatrixFreeOperator<dim, Number>> matrix(K_mf,
+                                                                 M_mf,
+                                                                 Alpha,
+                                                                 Beta);
+
+    Preconditioner<Number> preconditioner(K, M, Alpha, Beta, dof_handler);
+
+
+    Number                     frequency = 1.0;
+    RHSFunction<dim, Number>   rhs_function(frequency);
+    ExactSolution<dim, Number> exact_solution(frequency);
+
+    auto integrate_rhs_function =
+      [&mapping, &dof_handler, &quad, &rhs_function, &constraints, &Beta](
+        const double time, VectorType &rhs) -> void {
+      rhs_function.set_time(time);
+      VectorTools::create_right_hand_side(
+        mapping, dof_handler, quad, rhs_function, rhs, constraints);
+    };
+    [[maybe_unused]] auto evaluate_exact_solution =
+      [&mapping, &dof_handler, &exact_solution](const double time,
+                                                VectorType  &tmp) -> void {
+      exact_solution.set_time(time);
+      VectorTools::interpolate(mapping, dof_handler, exact_solution, tmp);
+    };
+    auto evaluate_numerical_solution =
+      [&mapping, &constraints, &basis, &fe_degree](
+        const double time, VectorType &tmp, BlockVectorType const &x) -> void {
+      int i = 0;
+      tmp   = 0.0;
+      for (auto const &el : basis)
+        {
+          if (double v = el.value(time); v != 0.0)
+            tmp.add(v, x.block(i));
+          ++i;
+        }
+      constraints.distribute(tmp);
+    };
+
+    BlockVectorType x(n_blocks);
+    for (unsigned int i = 0; i < n_blocks; ++i)
+      x.block(i).reinit(dof_handler.n_dofs());
+    VectorType integrated_x(dof_handler.n_dofs());
+
+    VectorType exact(dof_handler.n_dofs());
+    VectorType numeric(dof_handler.n_dofs());
+
+    unsigned int                 timestep_number = 0;
+    ErrorCalculator<dim, Number> error_calculator(type,
+                                                  fe_degree,
+                                                  fe_degree,
+                                                  mapping,
+                                                  dof_handler,
+                                                  exact_solution,
+                                                  evaluate_numerical_solution);
+
+    TimeIntegrator<dim, Number> step(type,
+                                     fe_degree,
+                                     Alpha,
+                                     Beta,
+                                     Gamma,
+                                     Zeta,
+                                     1.e-12,
+                                     matrix,
+                                     preconditioner,
+                                     integrate_rhs_function);
+
+    // interpolate initial value
+    evaluate_exact_solution(0, x.block(0));
+    M_mf.vmult(integrated_x, x.block(0));
+    double l2 = 0., l8 = -1., h1_semi = 0.;
+    while (time < end_time)
+      {
+        ++timestep_number;
+        integrated_x = 0.0;
+        if (timestep_number != 1)
+          M_mf.vmult(integrated_x, x.block(x.n_blocks() - 1));
+        step.solve(x, integrated_x, timestep_number, time, time_step_size);
+
+
+        for (unsigned int i = 0; i < n_blocks; ++i)
+          constraints.distribute(x.block(i));
+
+        auto error_on_In =
+          error_calculator.evaluate_error(time, time_step_size, x);
+        l2 += error_on_In[VectorTools::L2_norm];
+        l8 = std::max(error_on_In[VectorTools::Linfty_norm], l8);
+        h1_semi += error_on_In[VectorTools::H1_seminorm];
+        {
+          numeric = 0.0;
+          evaluate_numerical_solution(1.0, numeric, x);
+          DataOut<dim> data_out;
+          data_out.attach_dof_handler(dof_handler);
+          data_out.add_data_vector(numeric, "solution");
+          data_out.build_patches();
+
+          std::ofstream output("solution." +
+                               Utilities::int_to_string(timestep_number, 4) +
+                               ".vtu");
+          data_out.write_vtu(output);
+        }
+        time += time_step_size;
+        {
+          exact = 0.0;
+          evaluate_exact_solution(time, exact);
+          DataOut<dim> data_out;
+          data_out.attach_dof_handler(dof_handler);
+          data_out.add_data_vector(exact, "solution");
+          data_out.build_patches();
+          std::ofstream output(
+            "exact." + Utilities::int_to_string(timestep_number, 4) + ".vtu");
+          data_out.write_vtu(output);
+        }
+      }
+
+    unsigned int const n_active_cells = tria.n_active_cells();
+    unsigned int const n_dofs         = dof_handler.n_dofs();
+    table.add_value("cells", n_active_cells);
+    table.add_value("s-dofs", n_dofs);
+    table.add_value("t-dofs", n_blocks);
+    table.add_value("st-dofs", n_dofs * n_blocks);
+    table.add_value("L\u221E-L\u221E", l8);
+    table.add_value("L2-L2", std::sqrt(l2));
+    table.add_value("L2-H1_semi", std::sqrt(h1_semi));
   };
-
-  BlockVectorType x(n_blocks);
-  for (unsigned int i = 0; i < n_blocks; ++i)
-    x.block(i).reinit(dof_handler.n_dofs());
-  BlockVectorType previous_x(x);
-
-  unsigned int                 timestep_number = 0;
-  ErrorCalculator<dim, Number> error_calculator(type,
-                                                fe_degree,
-                                                fe_degree,
-                                                mapping,
-                                                dof_handler,
-                                                exact_solution,
-                                                evaluate_numerical_solution);
-
-  TimeIntegrator<dim, Number> step(type,
-                                   fe_degree,
-                                   Alpha,
-                                   Beta,
-                                   Gamma,
-                                   Zeta,
-                                   1.e-12,
-                                   matrix,
-                                   preconditioner,
-                                   integrate_rhs_function);
-
-  // interpolate initial value
-  evaluate_exact_solution(0, x.block(0));
-
-  double l2 = 0., l8 = -1., h1_semi = 0.;
-  while (time < end_time - 0.1 * time_step_size)
+  for (int j = 1; j < 4; ++j)
     {
-      time += time_step_size;
-      ++timestep_number;
-      previous_x = x;
-
-      step.solve(x, previous_x, timestep_number, time, time_step_size);
-
-
-      for (unsigned int i = 0; i < n_blocks; ++i)
-        constraints.distribute(x.block(i));
-
-      auto error_on_In = error_calculator.evaluate_error(0, 1.0, x);
-      l2 += error_on_In[VectorTools::L2_norm];
-      l8 = std::max(error_on_In[VectorTools::Linfty_norm], l8);
-      h1_semi += error_on_In[VectorTools::H1_seminorm];
-
-      DataOut<dim> data_out;
-      data_out.attach_dof_handler(dof_handler);
-      data_out.add_data_vector(x.block(n_blocks - 1), "solution");
-      data_out.build_patches();
-      std::ofstream output(
-        "solution" + Utilities::int_to_string(timestep_number, 4) + ".vtu");
-      data_out.write_vtu(output);
+      for (int i = 2; i < 5; ++i)
+        {
+          convergence_test(i, j);
+        }
+      table.evaluate_convergence_rates("L\u221E-L\u221E",
+                                       ConvergenceTable::reduction_rate_log2);
+      table.evaluate_convergence_rates("L2-L2",
+                                       ConvergenceTable::reduction_rate_log2);
+      table.evaluate_convergence_rates("L2-H1_semi",
+                                       ConvergenceTable::reduction_rate_log2);
+      table.write_text(std::cout);
+      std::cout << std::endl;
+      table.clear();
     }
-
-  unsigned int const n_active_cells = tria.n_active_cells();
-  unsigned int const n_dofs         = dof_handler.n_dofs();
-  table.add_value("cells", n_active_cells);
-  table.add_value("s dofs", n_dofs);
-  table.add_value("t dofs", n_blocks);
-  table.add_value("st dofs", n_dofs * n_blocks);
-  table.add_value("L\u221E-L\u221E", l8);
-  table.add_value("L2-L2", l2);
-  table.add_value("L2-H1_semi", h1_semi);
-  l8      = -1;
-  l2      = 0.0;
-  h1_semi = 0.0;
-
-  table.evaluate_convergence_rates("L\u221E-L\u221E",
-                                   ConvergenceTable::reduction_rate_log2);
-  table.evaluate_convergence_rates("L2-L2",
-                                   ConvergenceTable::reduction_rate_log2);
-  table.evaluate_convergence_rates("L2-H1_semi",
-                                   ConvergenceTable::reduction_rate_log2);
-  table.write_text(std::cout);
-  std::cout << std::endl;
 }
 
 
