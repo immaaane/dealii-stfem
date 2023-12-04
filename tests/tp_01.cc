@@ -682,15 +682,13 @@ test()
                                      integrate_rhs_function);
 
     // interpolate initial value
-    evaluate_exact_solution(0, x.block(0));
-    M_mf.vmult(integrated_x, x.block(0));
+    evaluate_exact_solution(0, x.block(x.n_blocks() - 1));
     double l2 = 0., l8 = -1., h1_semi = 0.;
     while (time < end_time)
       {
         ++timestep_number;
         integrated_x = 0.0;
-        if (timestep_number != 1)
-          M_mf.vmult(integrated_x, x.block(x.n_blocks() - 1));
+        M_mf.vmult(integrated_x, x.block(x.n_blocks() - 1));
         step.solve(x, integrated_x, timestep_number, time, time_step_size);
 
 
