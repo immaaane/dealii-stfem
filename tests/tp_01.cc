@@ -98,6 +98,8 @@ public:
     , M(M)
     , Alpha(Alpha_)
     , Beta(Beta_)
+    , alpha_is_zero(Alpha.all_zero())
+    , beta_is_zero(Beta.all_zero())
   {}
 
   void
@@ -112,7 +114,8 @@ public:
         K.vmult(tmp, src.block(i));
 
         for (unsigned int j = 0; j < n_blocks; ++j)
-          dst.block(j).add(Alpha(j, i), tmp);
+          if (Alpha(j, i) != 0.0)
+            dst.block(j).add(Alpha(j, i), tmp);
       }
 
     for (unsigned int i = 0; i < n_blocks; ++i)
@@ -120,7 +123,33 @@ public:
         M.vmult(tmp, src.block(i));
 
         for (unsigned int j = 0; j < n_blocks; ++j)
-          dst.block(j).add(Beta(j, i), tmp);
+          if (Beta(j, i) != 0.0)
+            dst.block(j).add(Beta(j, i), tmp);
+      }
+  }
+
+  // Specialization for a nx1 matrix. Useful for rhs assembly
+  void
+  vmult(BlockVectorType &dst, const VectorType &src) const
+  {
+    const unsigned int n_blocks = dst.n_blocks();
+
+    VectorType tmp;
+    tmp.reinit(src);
+    if (!alpha_is_zero)
+      {
+        K.vmult(tmp, src);
+        for (unsigned int j = 0; j < n_blocks; ++j)
+          if (Alpha(j, 0) != 0.0)
+            dst.block(j).add(Alpha(j, 0), tmp);
+      }
+
+    if (!beta_is_zero)
+      {
+        M.vmult(tmp, src);
+        for (unsigned int j = 0; j < n_blocks; ++j)
+          if (Beta(j, 0) != 0.0)
+            dst.block(j).add(Beta(j, 0), tmp);
       }
   }
 
@@ -129,6 +158,9 @@ private:
   const SystemMatrixType   &M;
   const FullMatrix<Number> &Alpha;
   const FullMatrix<Number> &Beta;
+
+  bool alpha_is_zero;
+  bool beta_is_zero;
 };
 
 
@@ -140,8 +172,8 @@ public:
   using BlockVectorType = BlockVector<Number>;
 
   template <int dim>
-  Preconditioner(const SparseMatrix<Number> &K,
-                 const SparseMatrix<Number> &M,
+  Preconditioner(const SparseMatrix<Number> &K_,
+                 const SparseMatrix<Number> &M_,
                  const FullMatrix<Number>   &Alpha,
                  const FullMatrix<Number>   &Beta,
                  const DoFHandler<dim>      &dof_handler)
@@ -159,12 +191,12 @@ public:
       }
     std::vector<FullMatrix<Number>> K_blocks, M_blocks;
 
-    SparseMatrixTools::restrict_to_full_matrices(K,
-                                                 K.get_sparsity_pattern(),
+    SparseMatrixTools::restrict_to_full_matrices(K_,
+                                                 K_.get_sparsity_pattern(),
                                                  indices,
                                                  K_blocks);
-    SparseMatrixTools::restrict_to_full_matrices(M,
-                                                 M.get_sparsity_pattern(),
+    SparseMatrixTools::restrict_to_full_matrices(M_,
+                                                 M_.get_sparsity_pattern(),
                                                  indices,
                                                  M_blocks);
 
@@ -342,14 +374,16 @@ public:
   using BlockVectorType = BlockVector<Number>;
 
   ErrorCalculator(
-    TimeStepType               type_,
-    unsigned int               time_degree,
-    unsigned int               space_degree,
-    Mapping<dim> const        &mapping_,
-    DoFHandler<dim> const     &dof_handler_,
-    ExactSolution<dim, Number> exact_solution_,
-    std::function<void(const double, VectorType &, BlockVectorType const &)>
-      evaluate_numerical_solution_)
+    TimeStepType                            type_,
+    unsigned int                            time_degree,
+    unsigned int                            space_degree,
+    Mapping<dim> const                     &mapping_,
+    DoFHandler<dim> const                  &dof_handler_,
+    ExactSolution<dim, Number>              exact_solution_,
+    std::function<void(const double,
+                       VectorType &,
+                       BlockVectorType const &,
+                       VectorType const &)> evaluate_numerical_solution_)
     : time_step_type(type_)
     , quad_cell(space_degree + 1)
     , quad_time(time_degree + 1)
@@ -362,7 +396,8 @@ public:
   std::unordered_map<VectorTools::NormType, double>
   evaluate_error(const double           time,
                  const double           time_step,
-                 BlockVectorType const &x) const
+                 BlockVectorType const &x,
+                 VectorType const      &prev_x) const
   {
     std::unordered_map<VectorTools::NormType, double> error{
       {VectorTools::L2_norm, 0.0},
@@ -380,7 +415,7 @@ public:
       {
         time_ = time + tq[q][0] * time_step;
         exact_solution.set_time(time_);
-        evaluate_numerical_solution(tq[q][0], numeric, x);
+        evaluate_numerical_solution(tq[q][0], numeric, x, prev_x);
 
         dealii::VectorTools::integrate_difference(mapping,
                                                   dof_handler,
@@ -434,7 +469,10 @@ private:
   const Mapping<dim>                &mapping;
   const DoFHandler<dim>             &dof_handler;
   mutable ExactSolution<dim, Number> exact_solution;
-  std::function<void(const double, VectorType &, BlockVectorType const &)>
+  std::function<void(const double,
+                     VectorType &,
+                     BlockVectorType const &,
+                     VectorType const &)>
     evaluate_numerical_solution;
 };
 
@@ -459,7 +497,8 @@ public:
     FullMatrix<Number> const &Zeta_,
     double const              gmres_tolerance_,
     SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix_,
-    Preconditioner<Number> const                   &preconditioner_,
+    Preconditioner<Number> const &preconditioner_,
+    SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix_,
     std::function<void(const double, VectorType &)> integrate_rhs_function)
     : type(type_)
     , time_degree(time_degree_)
@@ -471,6 +510,7 @@ public:
     , solver(solver_control)
     , preconditioner(preconditioner_)
     , matrix(matrix_)
+    , rhs_matrix(rhs_matrix_)
     , integrate_rhs_function(integrate_rhs_function)
   {
     if (type == TimeStepType::DG)
@@ -486,13 +526,15 @@ public:
 
   void
   solve(BlockVectorType                    &x,
-        VectorType const                   &integrated_x,
+        VectorType const                   &prev_x,
         [[maybe_unused]] const unsigned int timestep_number,
         const double                        time,
         [[maybe_unused]] const double       time_step) const
   {
     BlockVectorType rhs(x);
     rhs = 0.0;
+    rhs_matrix.vmult(rhs, prev_x);
+
     VectorType tmp(x.block(0));
 
     for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
@@ -505,13 +547,6 @@ public:
             if (Alpha(i, j) != 0.0)
               rhs.block(i).add(Alpha(i, j), tmp);
           }
-      }
-    for (unsigned int i = 0; i < rhs.n_blocks(); ++i)
-      {
-        if (Gamma(i, 0) != 0.0)
-          rhs.block(i).add(Gamma(i, 0), integrated_x);
-        if (Zeta(i, 0) != 0.0)
-          rhs.block(i).add(-Zeta(i, 0), integrated_x);
       }
 
     try
@@ -538,18 +573,18 @@ private:
   mutable SolverFGMRES<BlockVectorType>                        solver;
   Preconditioner<Number> const                                &preconditioner;
   SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix;
+  SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix;
   std::function<void(const double, VectorType &)> integrate_rhs_function;
 };
 
 template <int dim>
 void
-test()
+test(TimeStepType type)
 {
   using Number          = double;
   using BlockVectorType = BlockVector<Number>;
   using VectorType      = Vector<Number>;
 
-  TimeStepType     type = TimeStepType::DG;
   ConvergenceTable table;
   MappingQ1<dim>   mapping;
 
@@ -613,11 +648,18 @@ test()
     auto [Alpha, Beta, Gamma, Zeta] =
       get_fe_time_weights<Number>(type, fe_degree);
     Alpha *= time_step_size;
+    if (type == TimeStepType::CGP)
+      Gamma *= time_step_size;
 
     SystemMatrix<Number, MatrixFreeOperator<dim, Number>> matrix(K_mf,
                                                                  M_mf,
                                                                  Alpha,
                                                                  Beta);
+    SystemMatrix<Number, MatrixFreeOperator<dim, Number>> rhs_matrix(
+      K_mf,
+      M_mf,
+      (type == TimeStepType::CGP) ? Gamma : Zeta,
+      (type == TimeStepType::CGP) ? Zeta : Gamma);
 
     Preconditioner<Number> preconditioner(K, M, Alpha, Beta, dof_handler);
 
@@ -640,14 +682,22 @@ test()
       VectorTools::interpolate(mapping, dof_handler, exact_solution, tmp);
     };
     auto evaluate_numerical_solution =
-      [&mapping, &constraints, &basis, &fe_degree](
-        const double time, VectorType &tmp, BlockVectorType const &x) -> void {
+      [&mapping, &constraints, &basis, &fe_degree, &type](
+        const double           time,
+        VectorType            &tmp,
+        BlockVectorType const &x,
+        VectorType const      &prev_x) -> void {
       int i = 0;
       tmp   = 0.0;
       for (auto const &el : basis)
         {
           if (double v = el.value(time); v != 0.0)
-            tmp.add(v, x.block(i));
+            {
+              if (type == TimeStepType::DG)
+                tmp.add(v, x.block(i));
+              else
+                tmp.add(v, (i == 0) ? prev_x : x.block(i - 1));
+            }
           ++i;
         }
       constraints.distribute(tmp);
@@ -656,7 +706,7 @@ test()
     BlockVectorType x(n_blocks);
     for (unsigned int i = 0; i < n_blocks; ++i)
       x.block(i).reinit(dof_handler.n_dofs());
-    VectorType integrated_x(dof_handler.n_dofs());
+    VectorType prev_x(dof_handler.n_dofs());
 
     VectorType exact(dof_handler.n_dofs());
     VectorType numeric(dof_handler.n_dofs());
@@ -679,6 +729,7 @@ test()
                                      1.e-12,
                                      matrix,
                                      preconditioner,
+                                     rhs_matrix,
                                      integrate_rhs_function);
 
     // interpolate initial value
@@ -687,22 +738,21 @@ test()
     while (time < end_time)
       {
         ++timestep_number;
-        integrated_x = 0.0;
-        M_mf.vmult(integrated_x, x.block(x.n_blocks() - 1));
-        step.solve(x, integrated_x, timestep_number, time, time_step_size);
+        prev_x = x.block(x.n_blocks() - 1);
+        step.solve(x, prev_x, timestep_number, time, time_step_size);
 
 
         for (unsigned int i = 0; i < n_blocks; ++i)
           constraints.distribute(x.block(i));
 
         auto error_on_In =
-          error_calculator.evaluate_error(time, time_step_size, x);
+          error_calculator.evaluate_error(time, time_step_size, x, prev_x);
         l2 += error_on_In[VectorTools::L2_norm];
         l8 = std::max(error_on_In[VectorTools::Linfty_norm], l8);
         h1_semi += error_on_In[VectorTools::H1_seminorm];
         {
           numeric = 0.0;
-          evaluate_numerical_solution(1.0, numeric, x);
+          evaluate_numerical_solution(1.0, numeric, x, prev_x);
           DataOut<dim> data_out;
           data_out.attach_dof_handler(dof_handler);
           data_out.add_data_vector(numeric, "solution");
@@ -761,6 +811,6 @@ int
 main()
 {
   const int dim = 2;
-
-  test<dim>();
+  test<dim>(TimeStepType::DG);
+  test<dim>(TimeStepType::CGP);
 }

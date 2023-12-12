@@ -93,8 +93,8 @@ namespace dealii
     // Initialize return array of matrices
     std::array<FullMatrix<Number>, 4> ret{
       {FullMatrix<Number>(time_weights[0].m(), time_weights[0].n() - 1),
-       FullMatrix<Number>(time_weights[0].m(), 1),
        FullMatrix<Number>(time_weights[0].m(), time_weights[0].n() - 1),
+       FullMatrix<Number>(time_weights[0].m(), 1),
        FullMatrix<Number>(time_weights[0].m(), 1)}};
 
     // Generate indices for the last columns (LHS) and the first column (RHS)
@@ -107,11 +107,13 @@ namespace dealii
     std::iota(row_indices.begin(), row_indices.end(), 0);
 
     // Scatter matrices
-    time_weights[0].scatter_matrix_to(row_indices, lhs_indices, ret[0]);
-    time_weights[1].scatter_matrix_to(row_indices, rhs_indices, ret[1]);
-    time_weights[0].scatter_matrix_to(row_indices, lhs_indices, ret[2]);
-    time_weights[1].scatter_matrix_to(row_indices, rhs_indices, ret[3]);
+    ret[0].extract_submatrix_from(time_weights[0], row_indices, lhs_indices);
+    ret[1].extract_submatrix_from(time_weights[1], row_indices, lhs_indices);
+    ret[2].extract_submatrix_from(time_weights[0], row_indices, rhs_indices);
+    ret[3].extract_submatrix_from(time_weights[1], row_indices, rhs_indices);
 
+    ret[2] *= -1.0;
+    ret[3] *= -1.0;
     return ret;
   }
 
