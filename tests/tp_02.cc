@@ -2,7 +2,8 @@
 
 #include <deal.II/fe/fe_q.h>
 
-#include "fe_time.h"
+#include "include/fe_time.h"
+
 using namespace dealii;
 
 template <typename T>

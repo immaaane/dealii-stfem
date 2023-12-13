@@ -1,5 +1,9 @@
+#include <deal.II/base/conditional_ostream.h>
 #include <deal.II/base/convergence_table.h>
 #include <deal.II/base/quadrature_lib.h>
+
+#include <deal.II/distributed/repartitioning_policy_tools.h>
+#include <deal.II/distributed/tria.h>
 
 #include <deal.II/dofs/dof_handler.h>
 #include <deal.II/dofs/dof_tools.h>
@@ -9,87 +13,46 @@
 #include <deal.II/grid/grid_generator.h>
 
 #include <deal.II/lac/block_vector.h>
+#include <deal.II/lac/la_parallel_block_vector.h>
+#include <deal.II/lac/la_parallel_vector.h>
+#include <deal.II/lac/precondition.h>
 #include <deal.II/lac/solver_gmres.h>
 #include <deal.II/lac/sparse_matrix.h>
 #include <deal.II/lac/sparse_matrix_tools.h>
+#include <deal.II/lac/trilinos_precondition.h>
+#include <deal.II/lac/trilinos_sparse_matrix.h>
+#include <deal.II/lac/trilinos_sparsity_pattern.h>
 
 #include <deal.II/matrix_free/fe_evaluation.h>
 #include <deal.II/matrix_free/matrix_free.h>
 #include <deal.II/matrix_free/tools.h>
 
+#include <deal.II/multigrid/mg_coarse.h>
+#include <deal.II/multigrid/mg_matrix.h>
+#include <deal.II/multigrid/mg_smoother.h>
+#include <deal.II/multigrid/mg_transfer_global_coarsening.h>
+#include <deal.II/multigrid/multigrid.h>
+
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/matrix_creator.h>
 #include <deal.II/numerics/vector_tools.h>
 
-#include "fe_time.h"
+#include "include/exact_solution.h"
+#include "include/fe_time.h"
 
 using namespace dealii;
 using dealii::numbers::PI;
 
-template <int dim, typename Number>
-class ExactSolution : public Function<dim, Number>
-{
-public:
-  ExactSolution(double f_ = 1.0)
-    : Function<dim, Number>()
-    , f(f_)
-  {}
-
-  double
-  value(Point<dim> const &x, unsigned int const) const override final
-  {
-    Number value = sin(2 * PI * f * this->get_time());
-    for (unsigned int i = 0; i < dim; ++i)
-      value *= sin(2 * PI * f * x[i]);
-    return value;
-  }
-  Tensor<1, dim>
-  gradient(const Point<dim> &x, const unsigned int) const override final
-  {
-    Tensor<1, dim> grad;
-    for (unsigned int i = 0; i < dim; ++i)
-      {
-        grad[i] = 2 * PI * f * sin(2 * PI * f * this->get_time());
-        for (unsigned int j = 0; j < dim; ++j)
-          grad[i] *= (i == j ? cos(2 * PI * f * x[j]) : sin(2 * PI * f * x[j]));
-      }
-    return grad;
-  }
-
-private:
-  double const f;
-};
-
-template <int dim, typename Number>
-class RHSFunction : public Function<dim, Number>
-{
-public:
-  RHSFunction(double f_ = 1.0)
-    : Function<dim, Number>()
-    , f(f_)
-  {}
-
-  double
-  value(Point<dim> const &x, unsigned int const) const override final
-  {
-    Number value = 8 * PI * PI * f * f * sin(2 * PI * f * this->get_time()) +
-                   2 * PI * f * cos(2 * PI * f * this->get_time());
-    for (unsigned int i = 0; i < dim; ++i)
-      value *= sin(2 * PI * f * x[i]);
-    return value;
-  }
-
-private:
-  double const f;
-};
+using Number              = double;
+using VectorType          = LinearAlgebra::distributed::Vector<double>;
+using BlockVectorType     = LinearAlgebra::distributed::BlockVector<double>;
+using SparseMatrixType    = TrilinosWrappers::SparseMatrix;
+using SparsityPatternType = TrilinosWrappers::SparsityPattern;
 
 template <typename Number, typename SystemMatrixType>
 class SystemMatrix
 {
 public:
-  using VectorType      = Vector<Number>;
-  using BlockVectorType = BlockVector<Number>;
-
   SystemMatrix(const SystemMatrixType   &K,
                const SystemMatrixType   &M,
                const FullMatrix<Number> &Alpha_,
@@ -108,7 +71,7 @@ public:
     const unsigned int n_blocks = src.n_blocks();
 
     VectorType tmp;
-    tmp.reinit(src.block(0));
+    K.initialize_dof_vector(tmp);
     for (unsigned int i = 0; i < n_blocks; ++i)
       {
         K.vmult(tmp, src.block(i));
@@ -118,6 +81,7 @@ public:
             dst.block(j).add(Alpha(j, i), tmp);
       }
 
+    M.initialize_dof_vector(tmp);
     for (unsigned int i = 0; i < n_blocks; ++i)
       {
         M.vmult(tmp, src.block(i));
@@ -135,9 +99,9 @@ public:
     const unsigned int n_blocks = dst.n_blocks();
 
     VectorType tmp;
-    tmp.reinit(src);
     if (!alpha_is_zero)
       {
+        K.initialize_dof_vector(tmp);
         K.vmult(tmp, src);
         for (unsigned int j = 0; j < n_blocks; ++j)
           if (Alpha(j, 0) != 0.0)
@@ -146,11 +110,18 @@ public:
 
     if (!beta_is_zero)
       {
+        M.initialize_dof_vector(tmp);
         M.vmult(tmp, src);
         for (unsigned int j = 0; j < n_blocks; ++j)
           if (Beta(j, 0) != 0.0)
             dst.block(j).add(Beta(j, 0), tmp);
       }
+  }
+
+  void
+  initialize_dof_vector(VectorType &vec) const
+  {
+    K.initialize_dof_vector(vec);
   }
 
 private:
@@ -159,46 +130,41 @@ private:
   const FullMatrix<Number> &Alpha;
   const FullMatrix<Number> &Beta;
 
+  // Only used for nx1: small optimization to avoid unnecessary vmult
   bool alpha_is_zero;
   bool beta_is_zero;
 };
-
 
 template <typename Number>
 class Preconditioner
 {
 public:
-  using VectorType      = Vector<Number>;
-  using BlockVectorType = BlockVector<Number>;
-
   template <int dim>
-  Preconditioner(const SparseMatrix<Number> &K_,
-                 const SparseMatrix<Number> &M_,
-                 const FullMatrix<Number>   &Alpha,
-                 const FullMatrix<Number>   &Beta,
-                 const DoFHandler<dim>      &dof_handler)
+  Preconditioner(const SparseMatrixType    &K_,
+                 const SparseMatrixType    &M_,
+                 const SparsityPatternType &SP_,
+                 const FullMatrix<Number>  &Alpha,
+                 const FullMatrix<Number>  &Beta,
+                 const DoFHandler<dim>     &dof_handler)
     : valence(dof_handler.n_dofs())
   {
     for (const auto &cell : dof_handler.active_cell_iterators())
       {
-        std::vector<types::global_dof_index> my_indices(
-          cell->get_fe().n_dofs_per_cell());
-        cell->get_dof_indices(my_indices);
-        for (auto const &dof_index : my_indices)
-          valence(dof_index) += static_cast<Number>(1);
+        if (cell->is_locally_owned())
+          {
+            std::vector<types::global_dof_index> my_indices(
+              cell->get_fe().n_dofs_per_cell());
+            cell->get_dof_indices(my_indices);
+            for (auto const &dof_index : my_indices)
+              valence(dof_index) += static_cast<Number>(1);
 
-        indices.emplace_back(my_indices);
+            indices.emplace_back(my_indices);
+          }
       }
     std::vector<FullMatrix<Number>> K_blocks, M_blocks;
 
-    SparseMatrixTools::restrict_to_full_matrices(K_,
-                                                 K_.get_sparsity_pattern(),
-                                                 indices,
-                                                 K_blocks);
-    SparseMatrixTools::restrict_to_full_matrices(M_,
-                                                 M_.get_sparsity_pattern(),
-                                                 indices,
-                                                 M_blocks);
+    SparseMatrixTools::restrict_to_full_matrices(K_, SP_, indices, K_blocks);
+    SparseMatrixTools::restrict_to_full_matrices(M_, SP_, indices, M_blocks);
 
     blocks.resize(K_blocks.size());
 
@@ -228,7 +194,10 @@ public:
     Vector<Number> dst_local;
     Vector<Number> src_local;
 
+
     const unsigned int n_blocks = src.n_blocks();
+    for (unsigned int i = 0; i < n_blocks; ++i)
+      src.block(i).update_ghost_values();
 
     for (unsigned int i = 0; i < blocks.size(); ++i)
       {
@@ -251,6 +220,9 @@ public:
               dst.block(b)[indices[i][j]] += weight * dst_local[c];
             }
       }
+
+    for (unsigned int i = 0; i < n_blocks; ++i)
+      src.block(i).zero_out_ghost_values();
   }
 
 private:
@@ -264,12 +236,7 @@ private:
 template <int dim, typename Number>
 class MatrixFreeOperator
 {
-private:
-  using FECellIntegrator = FEEvaluation<dim, -1, 0, 1, Number>;
-
 public:
-  using VectorType = Vector<Number>;
-
   MatrixFreeOperator(const Mapping<dim>              &mapping,
                      const DoFHandler<dim>           &dof_handler,
                      const AffineConstraints<Number> &constraints,
@@ -287,6 +254,12 @@ public:
   }
 
   void
+  initialize_dof_vector(VectorType &vec) const
+  {
+    matrix_free.initialize_dof_vector(vec);
+  }
+
+  void
   vmult(VectorType &dst, const VectorType &src) const
   {
     matrix_free.cell_loop(
@@ -294,7 +267,7 @@ public:
   }
 
   void
-  compute_system_matrix(SparseMatrix<Number> &sparse_matrix) const
+  compute_system_matrix(SparseMatrixType &sparse_matrix) const
   {
     MatrixFreeTools::compute_matrix(matrix_free,
                                     matrix_free.get_affine_constraints(),
@@ -304,6 +277,8 @@ public:
   }
 
 private:
+  using FECellIntegrator = FEEvaluation<dim, -1, 0, 1, Number>;
+
   void
   do_cell_integral_range(
     const MatrixFree<dim, Number>               &matrix_free,
@@ -366,116 +341,6 @@ private:
   double laplace_matrix_scaling;
 };
 
-template <int dim, typename Number>
-class ErrorCalculator
-{
-public:
-  using VectorType      = Vector<Number>;
-  using BlockVectorType = BlockVector<Number>;
-
-  ErrorCalculator(
-    TimeStepType                            type_,
-    unsigned int                            time_degree,
-    unsigned int                            space_degree,
-    Mapping<dim> const                     &mapping_,
-    DoFHandler<dim> const                  &dof_handler_,
-    ExactSolution<dim, Number>              exact_solution_,
-    std::function<void(const double,
-                       VectorType &,
-                       BlockVectorType const &,
-                       VectorType const &)> evaluate_numerical_solution_)
-    : time_step_type(type_)
-    , quad_cell(space_degree + 1)
-    , quad_time(time_degree + 1)
-    , mapping(mapping_)
-    , dof_handler(dof_handler_)
-    , exact_solution(exact_solution_)
-    , evaluate_numerical_solution(evaluate_numerical_solution_)
-  {}
-
-  std::unordered_map<VectorTools::NormType, double>
-  evaluate_error(const double           time,
-                 const double           time_step,
-                 BlockVectorType const &x,
-                 VectorType const      &prev_x) const
-  {
-    std::unordered_map<VectorTools::NormType, double> error{
-      {VectorTools::L2_norm, 0.0},
-      {VectorTools::Linfty_norm, -1.0},
-      {VectorTools::H1_seminorm, 0.0}};
-    auto const &tq = quad_time.get_points();
-    auto const &tw = quad_time.get_weights();
-
-    VectorType     numeric(dof_handler.n_dofs());
-    Vector<double> differences_per_cell(
-      dof_handler.get_triangulation().n_active_cells());
-
-    double time_;
-    for (unsigned q = 0; q < quad_time.size(); ++q)
-      {
-        time_ = time + tq[q][0] * time_step;
-        exact_solution.set_time(time_);
-        evaluate_numerical_solution(tq[q][0], numeric, x, prev_x);
-
-        dealii::VectorTools::integrate_difference(mapping,
-                                                  dof_handler,
-                                                  numeric,
-                                                  exact_solution,
-                                                  differences_per_cell,
-                                                  quad_cell,
-                                                  dealii::VectorTools::L2_norm);
-        double l2 = dealii::VectorTools::compute_global_error(
-          dof_handler.get_triangulation(),
-          differences_per_cell,
-          dealii::VectorTools::L2_norm);
-        error[VectorTools::L2_norm] += time_step * tw[q] * l2 * l2;
-
-        dealii::VectorTools::integrate_difference(
-          mapping,
-          dof_handler,
-          numeric,
-          exact_solution,
-          differences_per_cell,
-          quad_cell,
-          dealii::VectorTools::Linfty_norm);
-        double l8 = dealii::VectorTools::compute_global_error(
-          dof_handler.get_triangulation(),
-          differences_per_cell,
-          dealii::VectorTools::Linfty_norm);
-        error[VectorTools::Linfty_norm] =
-          std::max(l8, error[VectorTools::Linfty_norm]);
-
-        dealii::VectorTools::integrate_difference(
-          mapping,
-          dof_handler,
-          numeric,
-          exact_solution,
-          differences_per_cell,
-          quad_cell,
-          dealii::VectorTools::H1_seminorm);
-        double h1 = dealii::VectorTools::compute_global_error(
-          dof_handler.get_triangulation(),
-          differences_per_cell,
-          dealii::VectorTools::H1_seminorm);
-        error[VectorTools::H1_seminorm] += time_step * tw[q] * h1 * h1;
-      }
-    return error;
-  }
-
-private:
-  TimeStepType                       time_step_type;
-  QGauss<dim> const                  quad_cell;
-  QGauss<dim> const                  quad_time;
-  const Mapping<dim>                &mapping;
-  const DoFHandler<dim>             &dof_handler;
-  mutable ExactSolution<dim, Number> exact_solution;
-  std::function<void(const double,
-                     VectorType &,
-                     BlockVectorType const &,
-                     VectorType const &)>
-    evaluate_numerical_solution;
-};
-
 /** Time stepping by DG and CGP variational time discretizations
  *
  * This time integrator is suited for linear problems. For nonlinear problems we
@@ -485,9 +350,6 @@ template <int dim, typename Number>
 class TimeIntegrator
 {
 public:
-  using VectorType      = Vector<Number>;
-  using BlockVectorType = BlockVector<Number>;
-
   TimeIntegrator(
     TimeStepType              type_,
     unsigned int              time_degree_,
@@ -507,21 +369,19 @@ public:
     , Zeta(Zeta_)
     , Gamma(Gamma_)
     , solver_control(1000, 1.e-16, gmres_tolerance_)
-    , solver(solver_control)
+    , solver(solver_control,
+             dealii::SolverFGMRES<BlockVectorType>::AdditionalData{
+               static_cast<unsigned int>(1000)})
     , preconditioner(preconditioner_)
     , matrix(matrix_)
     , rhs_matrix(rhs_matrix_)
     , integrate_rhs_function(integrate_rhs_function)
   {
     if (type == TimeStepType::DG)
-      {
-        quad_time =
-          QGaussRadau<1>(time_degree + 1, QGaussRadau<1>::EndPoint::right);
-      }
+      quad_time =
+        QGaussRadau<1>(time_degree + 1, QGaussRadau<1>::EndPoint::right);
     else if (type == TimeStepType::CGP)
-      {
-        quad_time = QGaussLobatto<1>(time_degree + 1);
-      }
+      quad_time = QGaussLobatto<1>(time_degree + 1);
   }
 
   void
@@ -531,11 +391,15 @@ public:
         const double                        time,
         [[maybe_unused]] const double       time_step) const
   {
-    BlockVectorType rhs(x);
-    rhs = 0.0;
+    BlockVectorType rhs(x.n_blocks());
+    for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
+      {
+        matrix.initialize_dof_vector(rhs.block(j));
+      }
     rhs_matrix.vmult(rhs, prev_x);
 
-    VectorType tmp(x.block(0));
+    VectorType tmp;
+    matrix.initialize_dof_vector(tmp);
 
     for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
       {
@@ -579,12 +443,11 @@ private:
 
 template <int dim>
 void
-test(TimeStepType type)
-{
-  using Number          = double;
-  using BlockVectorType = BlockVector<Number>;
-  using VectorType      = Vector<Number>;
 
+test(dealii::ConditionalOStream const &pcout,
+     MPI_Comm const                    comm_global,
+     TimeStepType                      type)
+{
   ConvergenceTable table;
   MappingQ1<dim>   mapping;
 
@@ -597,33 +460,45 @@ test(TimeStepType type)
     FE_Q<dim>   fe(fe_degree);
     QGauss<dim> quad(fe_degree + 1);
 
-    Triangulation<dim> tria;
+    parallel::distributed::Triangulation<dim> tria(comm_global);
+    DoFHandler<dim>                           dof_handler(tria);
+
     GridGenerator::hyper_cube(tria);
     tria.refine_global(refinement);
 
-    DoFHandler<dim> dof_handler(tria);
     dof_handler.distribute_dofs(fe);
 
     AffineConstraints<Number> constraints;
-    DoFTools::make_zero_boundary_constraints(dof_handler, constraints);
+    IndexSet                  locally_relevant_dofs;
+    DoFTools::extract_locally_relevant_dofs(dof_handler, locally_relevant_dofs);
+    constraints.reinit(locally_relevant_dofs);
+    DoFTools::make_hanging_node_constraints(dof_handler, constraints);
+    DoFTools::make_zero_boundary_constraints(dof_handler, 0, constraints);
     constraints.close();
+    pcout << ":: Number of active cells: " << tria.n_active_cells() << "\n"
+          << ":: Number of degrees of freedom: " << dof_handler.n_dofs() << "\n"
+          << std::endl;
 
     // create sparsity pattern
-    SparsityPattern sparsity_pattern(dof_handler.n_dofs(),
-                                     dof_handler.n_dofs());
-    DoFTools::make_sparsity_pattern(dof_handler, sparsity_pattern, constraints);
+    SparsityPatternType sparsity_pattern(dof_handler.locally_owned_dofs(),
+                                         dof_handler.locally_owned_dofs(),
+                                         dof_handler.get_communicator());
+    DoFTools::make_sparsity_pattern(dof_handler,
+                                    sparsity_pattern,
+                                    constraints,
+                                    false);
     sparsity_pattern.compress();
 
     // create scalar siffness matrix
-    SparseMatrix<Number> K;
+    SparseMatrixType K;
     K.reinit(sparsity_pattern);
 
     // create scalar mass matrix
-    SparseMatrix<Number> M;
+    SparseMatrixType M;
     M.reinit(sparsity_pattern);
 
     double time           = 0.;
-    double time_step_size = 1.0 * pow(2.0, -refinement);
+    double time_step_size = 1.0 * pow(2.0, -(refinement + 1));
     double end_time       = 1.;
 
     // matrix-free operators
@@ -661,7 +536,8 @@ test(TimeStepType type)
       (type == TimeStepType::CGP) ? Gamma : Zeta,
       (type == TimeStepType::CGP) ? Zeta : Gamma);
 
-    Preconditioner<Number> preconditioner(K, M, Alpha, Beta, dof_handler);
+    Preconditioner<Number> preconditioner(
+      K, M, sparsity_pattern, Alpha, Beta, dof_handler);
 
 
     Number                     frequency = 1.0;
@@ -682,7 +558,7 @@ test(TimeStepType type)
       VectorTools::interpolate(mapping, dof_handler, exact_solution, tmp);
     };
     auto evaluate_numerical_solution =
-      [&mapping, &constraints, &basis, &fe_degree, &type](
+      [&matrix, &mapping, &constraints, &basis, &fe_degree, &type](
         const double           time,
         VectorType            &tmp,
         BlockVectorType const &x,
@@ -705,11 +581,13 @@ test(TimeStepType type)
 
     BlockVectorType x(n_blocks);
     for (unsigned int i = 0; i < n_blocks; ++i)
-      x.block(i).reinit(dof_handler.n_dofs());
-    VectorType prev_x(dof_handler.n_dofs());
-
-    VectorType exact(dof_handler.n_dofs());
-    VectorType numeric(dof_handler.n_dofs());
+      matrix.initialize_dof_vector(x.block(i));
+    VectorType prev_x;
+    matrix.initialize_dof_vector(prev_x);
+    VectorType exact;
+    matrix.initialize_dof_vector(exact);
+    VectorType numeric;
+    matrix.initialize_dof_vector(numeric);
 
     unsigned int                 timestep_number = 0;
     ErrorCalculator<dim, Number> error_calculator(type,
@@ -740,7 +618,6 @@ test(TimeStepType type)
         ++timestep_number;
         prev_x = x.block(x.n_blocks() - 1);
         step.solve(x, prev_x, timestep_number, time, time_step_size);
-
 
         for (unsigned int i = 0; i < n_blocks; ++i)
           constraints.distribute(x.block(i));
@@ -799,8 +676,9 @@ test(TimeStepType type)
                                        ConvergenceTable::reduction_rate_log2);
       table.evaluate_convergence_rates("L2-H1_semi",
                                        ConvergenceTable::reduction_rate_log2);
-      table.write_text(std::cout);
-      std::cout << std::endl;
+      if (pcout.is_active())
+        table.write_text(pcout.get_stream());
+      pcout << std::endl;
       table.clear();
     }
 }
@@ -808,9 +686,14 @@ test(TimeStepType type)
 
 
 int
-main()
+main(int argc, char **argv)
 {
-  const int dim = 2;
-  test<dim>(TimeStepType::DG);
-  test<dim>(TimeStepType::CGP);
+  Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
+  dealii::ConditionalOStream       pcout(
+    std::cout, dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0);
+  MPI_Comm  comm = MPI_COMM_WORLD;
+  const int dim  = 2;
+
+  test<dim>(pcout, comm, TimeStepType::DG);
+  test<dim>(pcout, comm, TimeStepType::CGP);
 }
