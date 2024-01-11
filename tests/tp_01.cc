@@ -92,6 +92,33 @@ public:
       }
   }
 
+  void
+  Tvmult(BlockVectorType &dst, const BlockVectorType &src) const
+  {
+    const unsigned int n_blocks = src.n_blocks();
+
+    VectorType tmp;
+    K.initialize_dof_vector(tmp);
+    for (unsigned int i = 0; i < n_blocks; ++i)
+      {
+        K.vmult(tmp, src.block(i));
+
+        for (unsigned int j = 0; j < n_blocks; ++j)
+          if (Alpha(i, j) != 0.0)
+            dst.block(j).add(Alpha(i, j), tmp);
+      }
+
+    M.initialize_dof_vector(tmp);
+    for (unsigned int i = 0; i < n_blocks; ++i)
+      {
+        M.vmult(tmp, src.block(i));
+
+        for (unsigned int j = 0; j < n_blocks; ++j)
+          if (Beta(i, j) != 0.0)
+            dst.block(j).add(Beta(i, j), tmp);
+      }
+  }
+
   // Specialization for a nx1 matrix. Useful for rhs assembly
   void
   vmult(BlockVectorType &dst, const VectorType &src) const
@@ -105,7 +132,7 @@ public:
         K.vmult(tmp, src);
         for (unsigned int j = 0; j < n_blocks; ++j)
           if (Alpha(j, 0) != 0.0)
-            dst.block(j).add(Alpha(j, 0), tmp);
+            dst.block(j).equ(Alpha(j, 0), tmp);
       }
 
     if (!beta_is_zero)
@@ -114,7 +141,7 @@ public:
         M.vmult(tmp, src);
         for (unsigned int j = 0; j < n_blocks; ++j)
           if (Beta(j, 0) != 0.0)
-            dst.block(j).add(Beta(j, 0), tmp);
+            dst.block(j).equ(Beta(j, 0), tmp);
       }
   }
 
@@ -122,6 +149,14 @@ public:
   initialize_dof_vector(VectorType &vec) const
   {
     K.initialize_dof_vector(vec);
+  }
+
+  void
+  initialize_dof_vector(BlockVectorType &vec) const
+  {
+    vec.reinit(Alpha.m());
+    for (unsigned int i = 0; i < vec.n_blocks(); ++i)
+      this->initialize_dof_vector(vec.block(i));
   }
 
 private:
@@ -136,58 +171,93 @@ private:
 };
 
 template <typename Number>
-class Preconditioner
+class Smoother : public MGSmoother<BlockVectorType>
 {
 public:
+  struct AdditionalData
+  {};
   template <int dim>
-  Preconditioner(const SparseMatrixType    &K_,
-                 const SparseMatrixType    &M_,
-                 const SparsityPatternType &SP_,
-                 const FullMatrix<Number>  &Alpha,
-                 const FullMatrix<Number>  &Beta,
-                 const DoFHandler<dim>     &dof_handler)
-    : valence(dof_handler.n_dofs())
+  Smoother(MGLevelObject<std::shared_ptr<const SparseMatrixType>> const    &K_,
+           MGLevelObject<std::shared_ptr<const SparseMatrixType>> const    &M_,
+           MGLevelObject<std::shared_ptr<const SparsityPatternType>> const &SP_,
+           const FullMatrix<Number> &Alpha,
+           const FullMatrix<Number> &Beta,
+           MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> const
+             &mg_dof_handlers)
+    : dealii::MGSmoother<BlockVectorType>(
+        4,     // number of smoothing steps
+        true,  // double number of smoothing steps
+        false, // symmetric = symmetric smoothing (false)
+        false)
+    , indices(mg_dof_handlers.min_level(), mg_dof_handlers.max_level())
+    , valence(mg_dof_handlers.min_level(), mg_dof_handlers.max_level())
+    , blocks(mg_dof_handlers.min_level(), mg_dof_handlers.max_level())
   {
-    for (const auto &cell : dof_handler.active_cell_iterators())
+    std::vector<FullMatrix<Number>> K_blocks, M_blocks;
+    for (unsigned int l = mg_dof_handlers.min_level();
+         l <= mg_dof_handlers.max_level();
+         ++l)
       {
-        if (cell->is_locally_owned())
-          {
-            std::vector<types::global_dof_index> my_indices(
-              cell->get_fe().n_dofs_per_cell());
-            cell->get_dof_indices(my_indices);
-            for (auto const &dof_index : my_indices)
-              valence(dof_index) += static_cast<Number>(1);
+        IndexSet locally_relevant_dofs;
+        DoFTools::extract_locally_relevant_dofs(*mg_dof_handlers[l],
+                                                locally_relevant_dofs);
 
-            indices.emplace_back(my_indices);
+        valence[l].reinit(mg_dof_handlers[l]->locally_owned_dofs(),
+                          locally_relevant_dofs,
+                          mg_dof_handlers[l]->get_communicator());
+        for (const auto &cell : mg_dof_handlers[l]->active_cell_iterators())
+          {
+            if (cell->is_locally_owned())
+              {
+                std::vector<types::global_dof_index> my_indices(
+                  cell->get_fe().n_dofs_per_cell());
+                cell->get_dof_indices(my_indices);
+                for (auto const &dof_index : my_indices)
+                  valence[l](dof_index) += static_cast<Number>(1);
+
+                indices[l].emplace_back(my_indices);
+              }
+          }
+        valence[l].compress(VectorOperation::add);
+
+
+        SparseMatrixTools::restrict_to_full_matrices(*K_[l],
+                                                     *SP_[l],
+                                                     indices[l],
+                                                     K_blocks);
+        SparseMatrixTools::restrict_to_full_matrices(*M_[l],
+                                                     *SP_[l],
+                                                     indices[l],
+                                                     M_blocks);
+
+        blocks[l].resize(K_blocks.size());
+
+        for (unsigned int i = 0; i < blocks[l].size(); ++i)
+          {
+            const auto &K = K_blocks[i];
+            const auto &M = M_blocks[i];
+            auto       &B = blocks[l][i];
+
+            B = FullMatrix<Number>(K.m() * Alpha.m(), K.n() * Alpha.n());
+
+            for (unsigned int i = 0; i < Alpha.m(); ++i)
+              for (unsigned int j = 0; j < Alpha.n(); ++j)
+                for (unsigned int k = 0; k < K.m(); ++k)
+                  for (unsigned int l = 0; l < K.n(); ++l)
+                    B(k + i * K.m(), l + j * K.n()) =
+                      Beta(i, j) * M(k, l) + Alpha(i, j) * K(k, l);
+
+            B.gauss_jordan();
           }
       }
-    std::vector<FullMatrix<Number>> K_blocks, M_blocks;
-
-    SparseMatrixTools::restrict_to_full_matrices(K_, SP_, indices, K_blocks);
-    SparseMatrixTools::restrict_to_full_matrices(M_, SP_, indices, M_blocks);
-
-    blocks.resize(K_blocks.size());
-
-    for (unsigned int i = 0; i < blocks.size(); ++i)
-      {
-        const auto &K = K_blocks[i];
-        const auto &M = M_blocks[i];
-        auto       &B = blocks[i];
-
-        B = FullMatrix<Number>(K.m() * Alpha.m(), K.n() * Alpha.n());
-
-        for (unsigned int i = 0; i < Alpha.m(); ++i)
-          for (unsigned int j = 0; j < Alpha.n(); ++j)
-            for (unsigned int k = 0; k < K.m(); ++k)
-              for (unsigned int l = 0; l < K.n(); ++l)
-                B(k + i * K.m(), l + j * K.n()) =
-                  Beta(i, j) * M(k, l) + Alpha(i, j) * K(k, l);
-
-        B.gauss_jordan();
-      }
+    for (unsigned int l = mg_dof_handlers.min_level();
+         l <= mg_dof_handlers.max_level();
+         ++l)
+      valence[l].update_ghost_values();
   }
+
   void
-  vmult(BlockVectorType &dst, const BlockVectorType &src) const
+  vmult(unsigned int l, BlockVectorType &dst, const BlockVectorType &src) const
   {
     dst = 0.0;
 
@@ -199,39 +269,195 @@ public:
     for (unsigned int i = 0; i < n_blocks; ++i)
       src.block(i).update_ghost_values();
 
-    for (unsigned int i = 0; i < blocks.size(); ++i)
+    for (unsigned int i = 0; i < blocks[l].size(); ++i)
       {
         // gather
-        src_local.reinit(blocks[i].m());
-        dst_local.reinit(blocks[i].m());
+        src_local.reinit(blocks[l][i].m());
+        dst_local.reinit(blocks[l][i].m());
 
         for (unsigned int b = 0, c = 0; b < n_blocks; ++b)
-          for (unsigned int j = 0; j < indices[i].size(); ++j, ++c)
-            src_local[c] = src.block(b)[indices[i][j]];
+          for (unsigned int j = 0; j < indices[l][i].size(); ++j, ++c)
+            src_local[c] = src.block(b)[indices[l][i][j]];
 
         // patch solver
-        blocks[i].vmult(dst_local, src_local);
+        blocks[l][i].vmult(dst_local, src_local);
 
         // scatter
         for (unsigned int b = 0, c = 0; b < n_blocks; ++b)
-          for (unsigned int j = 0; j < indices[i].size(); ++j, ++c)
-            { // TODO: weight before or after for better perf?
-              Number const weight = damp / valence[indices[i][j]];
-              dst.block(b)[indices[i][j]] += weight * dst_local[c];
+          for (unsigned int j = 0; j < indices[l][i].size(); ++j, ++c)
+            {
+              Number const weight = damp / valence[l][indices[l][i][j]];
+              dst.block(b)[indices[l][i][j]] += weight * dst_local[c];
             }
       }
 
     for (unsigned int i = 0; i < n_blocks; ++i)
       src.block(i).zero_out_ghost_values();
+    dst.compress(VectorOperation::add);
+  }
+
+  void
+  clear() override final
+  {}
+
+  void
+  smooth(unsigned int const     level,
+         BlockVectorType       &u,
+         BlockVectorType const &rhs) const override final
+  {
+    vmult(level, u, rhs);
+  }
+
+
+
+private:
+  AdditionalData additional_data;
+  Number         damp = 1.5;
+  MGLevelObject<std::vector<std::vector<types::global_dof_index>>> indices;
+  MGLevelObject<VectorType>                                        valence;
+  MGLevelObject<std::vector<FullMatrix<Number>>>                   blocks;
+};
+
+struct PreconditionerGMGAdditionalData
+{
+  double       smoothing_range               = 20;
+  unsigned int smoothing_degree              = 5;
+  unsigned int smoothing_eig_cg_n_iterations = 20;
+
+  unsigned int coarse_grid_smoother_sweeps = 1;
+  unsigned int coarse_grid_n_cycles        = 1;
+  std::string  coarse_grid_smoother_type   = "Smoother";
+
+  unsigned int coarse_grid_maxiter = 1000;
+  double       coarse_grid_abstol  = 1e-20;
+  double       coarse_grid_reltol  = 1e-4;
+};
+template <int dim, typename LevelMatrixType>
+class GMG
+{
+  using MGTransferType = MGTransferBlockGlobalCoarsening<dim, VectorType>;
+
+public:
+  GMG(const DoFHandler<dim> &dof_handler,
+      const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>>
+        &mg_dof_handlers,
+      const MGLevelObject<std::shared_ptr<const AffineConstraints<Number>>>
+        &mg_constraints,
+      const MGLevelObject<std::shared_ptr<const LevelMatrixType>> &mg_operators,
+      const std::shared_ptr<MGSmootherBase<BlockVectorType>>      &mg_smoother_)
+    : dof_handler(dof_handler)
+    , mg_dof_handlers(mg_dof_handlers)
+    , mg_constraints(mg_constraints)
+    , mg_operators(mg_operators)
+    , min_level(mg_dof_handlers.min_level())
+    , max_level(mg_dof_handlers.max_level())
+    , transfers(min_level, max_level)
+    , mg_smoother(mg_smoother_)
+  {
+    // setup transfer operators
+    for (auto l = min_level; l < max_level; ++l)
+      transfers[l + 1].reinit(*mg_dof_handlers[l + 1],
+                              *mg_dof_handlers[l],
+                              *mg_constraints[l + 1],
+                              *mg_constraints[l]);
+    transfer_scalar =
+      std::make_unique<MGTransferGlobalCoarsening<dim, VectorType>>(
+        transfers, [&](const auto l, auto &vec) {
+          this->mg_operators[l]->initialize_dof_vector(vec);
+        });
+
+    transfer_block =
+      std::make_unique<MGTransferBlockGlobalCoarsening<dim, VectorType>>(
+        *transfer_scalar);
+  }
+
+  void
+  reinit() const
+  {
+    PreconditionerGMGAdditionalData additional_data;
+
+    // wrap level operators
+    mg_matrix = mg::Matrix<BlockVectorType>(mg_operators);
+
+    // setup smoothers on each level
+    for (unsigned int level = min_level; level <= max_level; ++level)
+      {
+        BlockVectorType vec;
+        mg_operators[level]->initialize_dof_vector(vec);
+      }
+
+    if (additional_data.coarse_grid_smoother_type != "Smoother")
+      {
+        // setup coarse-grid solver
+        const auto coarse_comm = mg_dof_handlers[min_level]->get_communicator();
+        if (coarse_comm != MPI_COMM_NULL)
+          {
+          }
+        else
+          {
+          }
+      }
+    else
+      {
+        mg_coarse =
+          std::make_unique<MGCoarseGridApplySmoother<BlockVectorType>>(
+            *mg_smoother);
+      }
+
+    // create multigrid algorithm (put level operators, smoothers, transfer
+    // operators and smoothers together)
+    mg = std::make_unique<Multigrid<BlockVectorType>>(mg_matrix,
+                                                      *mg_coarse,
+                                                      *transfer_block,
+                                                      *mg_smoother,
+                                                      *mg_smoother,
+                                                      min_level,
+                                                      max_level);
+
+    // convert multigrid algorithm to preconditioner
+    preconditioner =
+      std::make_unique<PreconditionMG<dim, BlockVectorType, MGTransferType>>(
+        dof_handler, *mg, *transfer_block);
+  }
+
+  void
+  vmult(BlockVectorType &dst, const BlockVectorType &src) const
+  {
+    preconditioner->vmult(dst, src);
+  }
+
+  std::unique_ptr<const GMG<dim, LevelMatrixType>>
+  clone() const
+  {
+    return std::make_unique<GMG<dim, LevelMatrixType>>(dof_handler,
+                                                       mg_dof_handlers,
+                                                       mg_constraints,
+                                                       mg_operators);
   }
 
 private:
-  Number                                            damp = 1;
-  std::vector<std::vector<types::global_dof_index>> indices;
-  VectorType                                        valence;
-  std::vector<FullMatrix<Number>>                   blocks;
-};
+  // using SmootherPreconditionerType = DiagonalMatrix<VectorType>;
+  const DoFHandler<dim>                                      &dof_handler;
+  const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers;
+  const MGLevelObject<std::shared_ptr<const AffineConstraints<Number>>>
+                                                              mg_constraints;
+  const MGLevelObject<std::shared_ptr<const LevelMatrixType>> mg_operators;
 
+  const unsigned int min_level;
+  const unsigned int max_level;
+
+  MGLevelObject<MGTwoLevelTransfer<dim, VectorType>>           transfers;
+  std::unique_ptr<MGTransferGlobalCoarsening<dim, VectorType>> transfer_scalar;
+  std::unique_ptr<MGTransferType>                              transfer_block;
+
+  mutable mg::Matrix<BlockVectorType>                      mg_matrix;
+  mutable std::shared_ptr<MGSmootherBase<BlockVectorType>> mg_smoother;
+
+  mutable std::unique_ptr<MGCoarseGridBase<BlockVectorType>> mg_coarse;
+  mutable std::unique_ptr<Multigrid<BlockVectorType>>        mg;
+  mutable std::unique_ptr<PreconditionMG<dim, BlockVectorType, MGTransferType>>
+    preconditioner;
+};
 
 template <int dim, typename Number>
 class MatrixFreeOperator
@@ -359,7 +585,8 @@ public:
     FullMatrix<Number> const &Zeta_,
     double const              gmres_tolerance_,
     SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix_,
-    Preconditioner<Number> const &preconditioner_,
+    GMG<dim, SystemMatrix<Number, MatrixFreeOperator<dim, Number>>> const
+      &preconditioner_,
     SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix_,
     std::function<void(const double, VectorType &)> integrate_rhs_function)
     : type(type_)
@@ -368,7 +595,7 @@ public:
     , Beta(Beta_)
     , Zeta(Zeta_)
     , Gamma(Gamma_)
-    , solver_control(1000, 1.e-16, gmres_tolerance_)
+    , solver_control(1000, 1.e-16, gmres_tolerance_, true, true)
     , solver(solver_control,
              dealii::SolverFGMRES<BlockVectorType>::AdditionalData{
                static_cast<unsigned int>(1000)})
@@ -389,7 +616,7 @@ public:
         VectorType const                   &prev_x,
         [[maybe_unused]] const unsigned int timestep_number,
         const double                        time,
-        [[maybe_unused]] const double       time_step) const
+        const double                        time_step) const
   {
     BlockVectorType rhs(x.n_blocks());
     for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
@@ -403,7 +630,6 @@ public:
 
     for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
       {
-        tmp          = 0.0;
         double time_ = time + time_step * quad_time.point(j)[0];
         integrate_rhs_function(time_, tmp);
         for (unsigned int i = 0; i < rhs.n_blocks(); ++i)
@@ -433,9 +659,10 @@ private:
   FullMatrix<Number> const &Zeta;
   FullMatrix<Number> const &Gamma;
 
-  mutable ReductionControl                                     solver_control;
-  mutable SolverFGMRES<BlockVectorType>                        solver;
-  Preconditioner<Number> const                                &preconditioner;
+  mutable ReductionControl              solver_control;
+  mutable SolverFGMRES<BlockVectorType> solver;
+  GMG<dim, SystemMatrix<Number, MatrixFreeOperator<dim, Number>>> const
+                                                              &preconditioner;
   SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix;
   SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix;
   std::function<void(const double, VectorType &)> integrate_rhs_function;
@@ -443,7 +670,6 @@ private:
 
 template <int dim>
 void
-
 test(dealii::ConditionalOStream const &pcout,
      MPI_Comm const                    comm_global,
      TimeStepType                      type)
@@ -453,7 +679,8 @@ test(dealii::ConditionalOStream const &pcout,
 
 
   auto convergence_test = [&](int const          refinement,
-                              unsigned int const fe_degree) {
+                              unsigned int const fe_degree,
+                              bool               do_output) {
     const unsigned int n_blocks =
       type == TimeStepType::DG ? fe_degree + 1 : fe_degree;
     auto const  basis = get_time_basis<Number>(type, fe_degree);
@@ -536,21 +763,127 @@ test(dealii::ConditionalOStream const &pcout,
       (type == TimeStepType::CGP) ? Gamma : Zeta,
       (type == TimeStepType::CGP) ? Zeta : Gamma);
 
-    Preconditioner<Number> preconditioner(
-      K, M, sparsity_pattern, Alpha, Beta, dof_handler);
+    /// GMG
+    RepartitioningPolicyTools::DefaultPolicy<dim>          policy(true);
+    std::vector<std::shared_ptr<const Triangulation<dim>>> mg_triangulations =
+      MGTransferGlobalCoarseningTools::create_geometric_coarsening_sequence(
+        tria, policy);
+    const unsigned int min_level = 0;
+    const unsigned int max_level = mg_triangulations.size() - 1;
+    pcout << ":: Min Level " << min_level << "  Max Level " << max_level
+          << std::endl;
+    MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers(
+      min_level, max_level);
+    MGLevelObject<std::shared_ptr<const SparsityPatternType>>
+      mg_sparsity_patterns(min_level, max_level);
+    MGLevelObject<std::shared_ptr<const SparseMatrixType>> mg_M(min_level,
+                                                                max_level);
+    MGLevelObject<std::shared_ptr<const SparseMatrixType>> mg_K(min_level,
+                                                                max_level);
+    MGLevelObject<std::shared_ptr<const MatrixFreeOperator<dim, Number>>>
+      mg_M_mf(min_level, max_level);
+    MGLevelObject<std::shared_ptr<const MatrixFreeOperator<dim, Number>>>
+      mg_K_mf(min_level, max_level);
+    MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
+      mg_constraints(min_level, max_level);
+    MGLevelObject<std::shared_ptr<
+      const SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>>
+      mg_operators(min_level, max_level);
 
+    for (unsigned int l = min_level; l <= max_level; ++l)
+      {
+        auto dof_handler_ =
+          std::make_shared<DoFHandler<dim>>(*mg_triangulations[l]);
+        auto constraints_ = std::make_shared<AffineConstraints<double>>();
+        dof_handler_->distribute_dofs(fe);
 
-    Number                     frequency = 1.0;
-    RHSFunction<dim, Number>   rhs_function(frequency);
-    ExactSolution<dim, Number> exact_solution(frequency);
+        IndexSet locally_relevant_dofs;
+        DoFTools::extract_locally_relevant_dofs(*dof_handler_,
+                                                locally_relevant_dofs);
+        constraints_->reinit(locally_relevant_dofs);
+        DoFTools::make_zero_boundary_constraints(*dof_handler_,
+                                                 0,
+                                                 *constraints_);
+        constraints_->close();
+
+        // matrix-free operators
+        auto K_mf_ = std::make_shared<MatrixFreeOperator<dim, Number>>(
+          mapping, *dof_handler_, *constraints_, quad, 0.0, 1.0);
+        auto M_mf_ = std::make_shared<MatrixFreeOperator<dim, Number>>(
+          mapping, *dof_handler_, *constraints_, quad, 1.0, 0.0);
+
+        mg_operators[l] = std::make_shared<
+          SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(*K_mf_,
+                                                                 *M_mf_,
+                                                                 Alpha,
+                                                                 Beta);
+
+        auto sparsity_pattern_ = std::make_shared<SparsityPatternType>(
+          dof_handler_->locally_owned_dofs(),
+          dof_handler_->locally_owned_dofs(),
+          dof_handler_->get_communicator());
+        DoFTools::make_sparsity_pattern(*dof_handler_,
+                                        *sparsity_pattern_,
+                                        *constraints_,
+                                        false);
+        sparsity_pattern_->compress();
+
+        auto K_ = std::make_shared<SparseMatrixType>();
+        K_->reinit(*sparsity_pattern_);
+        auto M_ = std::make_shared<SparseMatrixType>();
+        M_->reinit(*sparsity_pattern_);
+        K_mf_->compute_system_matrix(*K_);
+        M_mf_->compute_system_matrix(*M_);
+
+        // matrix->attach(*mg_operators[l]);
+        mg_sparsity_patterns[l] = sparsity_pattern_;
+        mg_M_mf[l]              = M_mf_;
+        mg_K_mf[l]              = K_mf_;
+        mg_M[l]                 = M_;
+        mg_K[l]                 = K_;
+        mg_dof_handlers[l]      = dof_handler_;
+        mg_constraints[l]       = constraints_;
+      }
+
+    std::shared_ptr<MGSmoother<BlockVectorType>> smoother =
+      std::make_shared<Smoother<Number>>(
+        mg_K, mg_M, mg_sparsity_patterns, Alpha, Beta, mg_dof_handlers);
+    // std::shared_ptr<MGSmootherBase<BlockVectorType>> smoother =
+    //   std::make_shared<MGSmootherIdentity<BlockVectorType>>();
+    auto preconditioner = std::make_unique<
+      GMG<dim, SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>>(
+      dof_handler, mg_dof_handlers, mg_constraints, mg_operators, smoother);
+    preconditioner->reinit();
+    //
+    /// GMG
+
+    // Number                      frequency = 1.0;
+    RHSFunction2<dim, Number>   rhs_function;
+    ExactSolution2<dim, Number> exact_solution;
 
     auto integrate_rhs_function =
       [&mapping, &dof_handler, &quad, &rhs_function, &constraints, &Beta](
         const double time, VectorType &rhs) -> void {
       rhs_function.set_time(time);
+      rhs = 0.0;
       VectorTools::create_right_hand_side(
         mapping, dof_handler, quad, rhs_function, rhs, constraints);
     };
+    // [[maybe_unused]] auto evaluate_exact_solution =
+    //   [&mapping,
+    //    &dof_handler,
+    //    &exact_solution,
+    //    &basis](const double time, VectorType &tmp) -> void {
+    //   exact_solution.set_time(time);
+    //   tmp             = 0.;
+    //   VectorType tmp_ = tmp;
+    //   for (auto const &el : basis)
+    //     {
+    //       VectorTools::interpolate(mapping, dof_handler, exact_solution,
+    //       tmp_); if (double v = el.value(time); v != 0.0)
+    //         tmp.add(v, tmp_);
+    //     }
+    // };
     [[maybe_unused]] auto evaluate_exact_solution =
       [&mapping, &dof_handler, &exact_solution](const double time,
                                                 VectorType  &tmp) -> void {
@@ -606,7 +939,7 @@ test(dealii::ConditionalOStream const &pcout,
                                      Zeta,
                                      1.e-12,
                                      matrix,
-                                     preconditioner,
+                                     *preconditioner,
                                      rhs_matrix,
                                      integrate_rhs_function);
 
@@ -616,42 +949,47 @@ test(dealii::ConditionalOStream const &pcout,
     while (time < end_time)
       {
         ++timestep_number;
+        dealii::deallog << "Step " << timestep_number << " t = " << time
+                        << std::endl;
+
         prev_x = x.block(x.n_blocks() - 1);
         step.solve(x, prev_x, timestep_number, time, time_step_size);
-
         for (unsigned int i = 0; i < n_blocks; ++i)
           constraints.distribute(x.block(i));
 
         auto error_on_In =
           error_calculator.evaluate_error(time, time_step_size, x, prev_x);
+        time += time_step_size;
+
         l2 += error_on_In[VectorTools::L2_norm];
         l8 = std::max(error_on_In[VectorTools::Linfty_norm], l8);
         h1_semi += error_on_In[VectorTools::H1_seminorm];
-        {
-          numeric = 0.0;
-          evaluate_numerical_solution(1.0, numeric, x, prev_x);
-          DataOut<dim> data_out;
-          data_out.attach_dof_handler(dof_handler);
-          data_out.add_data_vector(numeric, "solution");
-          data_out.build_patches();
+        if (do_output)
+          {
+            numeric = 0.0;
+            evaluate_numerical_solution(1.0, numeric, x, prev_x);
+            DataOut<dim> data_out;
+            data_out.attach_dof_handler(dof_handler);
+            data_out.add_data_vector(numeric, "solution");
+            data_out.build_patches();
 
-          std::ofstream output("solution." +
-                               Utilities::int_to_string(timestep_number, 4) +
-                               ".vtu");
-          data_out.write_vtu(output);
-        }
-        time += time_step_size;
-        {
-          exact = 0.0;
-          evaluate_exact_solution(time, exact);
-          DataOut<dim> data_out;
-          data_out.attach_dof_handler(dof_handler);
-          data_out.add_data_vector(exact, "solution");
-          data_out.build_patches();
-          std::ofstream output(
-            "exact." + Utilities::int_to_string(timestep_number, 4) + ".vtu");
-          data_out.write_vtu(output);
-        }
+            std::ofstream output("solution." +
+                                 Utilities::int_to_string(timestep_number, 4) +
+                                 ".vtu");
+            data_out.write_vtu(output);
+          }
+        if (do_output)
+          {
+            exact = 0.0;
+            evaluate_exact_solution(time, exact);
+            DataOut<dim> data_out;
+            data_out.attach_dof_handler(dof_handler);
+            data_out.add_data_vector(exact, "solution");
+            data_out.build_patches();
+            std::ofstream output(
+              "exact." + Utilities::int_to_string(timestep_number, 4) + ".vtu");
+            data_out.write_vtu(output);
+          }
       }
 
     unsigned int const n_active_cells = tria.n_active_cells();
@@ -668,7 +1006,7 @@ test(dealii::ConditionalOStream const &pcout,
     {
       for (int i = 2; i < 5; ++i)
         {
-          convergence_test(i, j);
+          convergence_test(i, j, j == 2 && i == 4);
         }
       table.evaluate_convergence_rates("L\u221E-L\u221E",
                                        ConvergenceTable::reduction_rate_log2);
@@ -691,9 +1029,18 @@ main(int argc, char **argv)
   Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
   dealii::ConditionalOStream       pcout(
     std::cout, dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0);
+  std::string filename =
+    "proc" +
+    std::to_string(dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD)) +
+    ".log";
+  std::ofstream pout(filename);
+  dealii::deallog.attach(pout);
+  dealii::deallog.depth_console(0);
   MPI_Comm  comm = MPI_COMM_WORLD;
   const int dim  = 2;
 
   test<dim>(pcout, comm, TimeStepType::DG);
   test<dim>(pcout, comm, TimeStepType::CGP);
+  dealii::deallog << std::endl;
+  pcout << std::endl;
 }

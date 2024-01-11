@@ -71,6 +71,65 @@ private:
 };
 
 template <int dim, typename Number>
+class RHSFunction2 : public Function<dim, Number>
+{
+public:
+  RHSFunction2()
+    : Function<dim>()
+  {}
+
+  virtual double
+  value(const Point<dim> &p, const unsigned int) const override
+  {
+    const double x = p[0];
+    const double y = dim >= 2 ? p[1] : 0.0;
+    const double z = dim >= 3 ? p[2] : 0.0;
+    const double t = this->get_time();
+
+    if (dim == 2)
+      return sin(2 * PI * x) * sin(2 * PI * y) *
+             (PI * cos(PI * t) - 0.5 * (sin(PI * t) + 1) +
+              (2 * 2 + 2 * 2) * PI * PI * (sin(PI * t) + 1)) *
+             exp(-0.5 * t);
+    else if (dim == 3)
+      return sin(2 * PI * x) * sin(2 * PI * y) * sin(2 * PI * z) *
+             (PI * cos(PI * t) - 0.5 * (sin(PI * t) + 1) +
+              (2 * 2 + 2 * 2 + 2 * 2) * PI * PI * (sin(PI * t) + 1)) *
+             exp(-0.5 * t);
+    return 0.0;
+  }
+};
+
+template <int dim, typename Number>
+class ExactSolution2 : public Function<dim, Number>
+{
+public:
+  ExactSolution2()
+    : Function<dim>()
+  {}
+
+  virtual double
+  value(const Point<dim> &p, const unsigned int) const override
+  {
+    const double x = p[0];
+    const double y = dim >= 2 ? p[1] : 0.0;
+    const double z = dim >= 3 ? p[2] : 0.0;
+    const double t = this->get_time();
+
+    if (dim == 2)
+      return sin(2 * PI * x) * sin(2 * PI * y) * (1 + sin(PI * t)) *
+             exp(-0.5 * t);
+    else if (dim == 3)
+      return sin(2 * PI * x) * sin(2 * PI * y) * sin(2 * PI * z) *
+             (1 + sin(PI * t)) * exp(-0.5 * t);
+
+    Assert(false, ExcNotImplemented());
+
+    return 0.0;
+  }
+};
+
+template <int dim, typename Number>
 class ErrorCalculator
 {
 public:
@@ -80,7 +139,7 @@ public:
     unsigned int                            space_degree,
     Mapping<dim> const                     &mapping_,
     DoFHandler<dim> const                  &dof_handler_,
-    ExactSolution<dim, Number>              exact_solution_,
+    Function<dim, Number>                  &exact_solution_,
     std::function<void(const double,
                        VectorType &,
                        BlockVectorType const &,
@@ -173,12 +232,12 @@ public:
   }
 
 private:
-  TimeStepType                       time_step_type;
-  QGauss<dim> const                  quad_cell;
-  QGauss<dim> const                  quad_time;
-  const Mapping<dim>                &mapping;
-  const DoFHandler<dim>             &dof_handler;
-  mutable ExactSolution<dim, Number> exact_solution;
+  TimeStepType           time_step_type;
+  QGauss<dim> const      quad_cell;
+  QGauss<dim> const      quad_time;
+  const Mapping<dim>    &mapping;
+  const DoFHandler<dim> &dof_handler;
+  Function<dim, Number> &exact_solution;
   std::function<void(const double,
                      VectorType &,
                      BlockVectorType const &,
