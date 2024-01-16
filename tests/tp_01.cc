@@ -312,7 +312,7 @@ public:
 
 private:
   AdditionalData additional_data;
-  Number         damp = 1.5;
+  Number         damp = 1.0;
   MGLevelObject<std::vector<std::vector<types::global_dof_index>>> indices;
   MGLevelObject<VectorType>                                        valence;
   MGLevelObject<std::vector<FullMatrix<Number>>>                   blocks;
@@ -598,7 +598,7 @@ public:
     , solver_control(1000, 1.e-16, gmres_tolerance_, true, true)
     , solver(solver_control,
              dealii::SolverFGMRES<BlockVectorType>::AdditionalData{
-               static_cast<unsigned int>(1000)})
+               static_cast<unsigned int>(50)})
     , preconditioner(preconditioner_)
     , matrix(matrix_)
     , rhs_matrix(rhs_matrix_)
@@ -625,20 +625,7 @@ public:
       }
     rhs_matrix.vmult(rhs, prev_x);
 
-    VectorType tmp;
-    matrix.initialize_dof_vector(tmp);
-
-    for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
-      {
-        double time_ = time + time_step * quad_time.point(j)[0];
-        integrate_rhs_function(time_, tmp);
-        for (unsigned int i = 0; i < rhs.n_blocks(); ++i)
-          {
-            if (Alpha(i, j) != 0.0)
-              rhs.block(i).add(Alpha(i, j), tmp);
-          }
-      }
-
+    assemble_force(rhs, time, time_step);
     try
       {
         solver.solve(matrix, x, rhs, preconditioner);
@@ -648,7 +635,40 @@ public:
         AssertThrow(false, ExcMessage(e.what()));
       }
   }
+  void
+  assemble_force(BlockVectorType &rhs,
+                 double const     time,
+                 double const     time_step) const
+  {
+    VectorType tmp;
+    matrix.initialize_dof_vector(tmp);
 
+    for (unsigned int j = 0; j < quad_time.size(); ++j)
+      {
+        double time_ = time + time_step * quad_time.point(j)[0];
+        integrate_rhs_function(time_, tmp);
+        for (unsigned int i = 0; i < rhs.n_blocks(); ++i)
+          {
+            if (type == TimeStepType::DG)
+              {
+                if (i == j)
+                  rhs.block(i).add(Alpha(i, j), tmp);
+              }
+            else if (type == TimeStepType::CGP)
+              {
+                if (j == 0)
+                  {
+                    rhs.block(i).add(-Gamma(i, 0), tmp);
+                  }
+                else
+                  {
+                    if (i == j - 1)
+                      rhs.block(i).add(Alpha(i, j - 1), tmp);
+                  }
+              }
+          }
+      }
+  }
 
 private:
   TimeStepType              type;
@@ -858,8 +878,8 @@ test(dealii::ConditionalOStream const &pcout,
     /// GMG
 
     // Number                      frequency = 1.0;
-    RHSFunction2<dim, Number>   rhs_function;
-    ExactSolution2<dim, Number> exact_solution;
+    RHSFunction<dim, Number>   rhs_function;
+    ExactSolution<dim, Number> exact_solution;
 
     auto integrate_rhs_function =
       [&mapping, &dof_handler, &quad, &rhs_function, &constraints, &Beta](
