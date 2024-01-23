@@ -232,11 +232,11 @@ public:
 
         blocks[l].resize(K_blocks.size());
 
-        for (unsigned int i = 0; i < blocks[l].size(); ++i)
+        for (unsigned int ii = 0; ii < blocks[l].size(); ++ii)
           {
-            const auto &K = K_blocks[i];
-            const auto &M = M_blocks[i];
-            auto       &B = blocks[l][i];
+            const auto &K = K_blocks[ii];
+            const auto &M = M_blocks[ii];
+            auto       &B = blocks[l][ii];
 
             B = FullMatrix<Number>(K.m() * Alpha.m(), K.n() * Alpha.n());
 
@@ -704,8 +704,8 @@ test(dealii::ConditionalOStream const &pcout,
     const unsigned int n_blocks =
       type == TimeStepType::DG ? fe_degree + 1 : fe_degree;
     auto const  basis = get_time_basis<Number>(type, fe_degree);
-    FE_Q<dim>   fe(fe_degree);
-    QGauss<dim> quad(fe_degree + 1);
+    FE_Q<dim>   fe(fe_degree + 1);
+    QGauss<dim> quad(fe.tensor_degree() + 1);
 
     parallel::distributed::Triangulation<dim> tria(comm_global);
     DoFHandler<dim>                           dof_handler(tria);
@@ -720,7 +720,7 @@ test(dealii::ConditionalOStream const &pcout,
     DoFTools::extract_locally_relevant_dofs(dof_handler, locally_relevant_dofs);
     constraints.reinit(locally_relevant_dofs);
     DoFTools::make_hanging_node_constraints(dof_handler, constraints);
-    DoFTools::make_zero_boundary_constraints(dof_handler, 0, constraints);
+    DoFTools::make_zero_boundary_constraints(dof_handler, constraints);
     constraints.close();
     pcout << ":: Number of active cells: " << tria.n_active_cells() << "\n"
           << ":: Number of degrees of freedom: " << dof_handler.n_dofs() << "\n"
@@ -882,28 +882,13 @@ test(dealii::ConditionalOStream const &pcout,
     ExactSolution<dim, Number> exact_solution;
 
     auto integrate_rhs_function =
-      [&mapping, &dof_handler, &quad, &rhs_function, &constraints, &Beta](
+      [&mapping, &dof_handler, &quad, &rhs_function, &constraints](
         const double time, VectorType &rhs) -> void {
       rhs_function.set_time(time);
       rhs = 0.0;
       VectorTools::create_right_hand_side(
         mapping, dof_handler, quad, rhs_function, rhs, constraints);
     };
-    // [[maybe_unused]] auto evaluate_exact_solution =
-    //   [&mapping,
-    //    &dof_handler,
-    //    &exact_solution,
-    //    &basis](const double time, VectorType &tmp) -> void {
-    //   exact_solution.set_time(time);
-    //   tmp             = 0.;
-    //   VectorType tmp_ = tmp;
-    //   for (auto const &el : basis)
-    //     {
-    //       VectorTools::interpolate(mapping, dof_handler, exact_solution,
-    //       tmp_); if (double v = el.value(time); v != 0.0)
-    //         tmp.add(v, tmp_);
-    //     }
-    // };
     [[maybe_unused]] auto evaluate_exact_solution =
       [&mapping, &dof_handler, &exact_solution](const double time,
                                                 VectorType  &tmp) -> void {
@@ -911,11 +896,10 @@ test(dealii::ConditionalOStream const &pcout,
       VectorTools::interpolate(mapping, dof_handler, exact_solution, tmp);
     };
     auto evaluate_numerical_solution =
-      [&matrix, &mapping, &constraints, &basis, &fe_degree, &type](
-        const double           time,
-        VectorType            &tmp,
-        BlockVectorType const &x,
-        VectorType const      &prev_x) -> void {
+      [&constraints, &basis, &type](const double           time,
+                                    VectorType            &tmp,
+                                    BlockVectorType const &x,
+                                    VectorType const      &prev_x) -> void {
       int i = 0;
       tmp   = 0.0;
       for (auto const &el : basis)
@@ -1022,11 +1006,13 @@ test(dealii::ConditionalOStream const &pcout,
     table.add_value("L2-L2", std::sqrt(l2));
     table.add_value("L2-H1_semi", std::sqrt(h1_semi));
   };
-  for (int j = 1; j < 4; ++j)
+  for (int j = 0; j < 2; ++j)
     {
-      for (int i = 2; i < 5; ++i)
+      for (int i = 1; i < 5; ++i)
         {
-          convergence_test(i, j, j == 2 && i == 4);
+          convergence_test(i,
+                           type == TimeStepType::DG ? j : j + 1,
+                           j == 2 && i == 4);
         }
       table.evaluate_convergence_rates("L\u221E-L\u221E",
                                        ConvergenceTable::reduction_rate_log2);

@@ -34,9 +34,10 @@ public:
   gradient(const Point<dim> &x, const unsigned int) const override final
   {
     Tensor<1, dim> grad;
+    double         tv = 2 * PI * f * sin(2 * PI * f * this->get_time());
     for (unsigned int i = 0; i < dim; ++i)
       {
-        grad[i] = 2 * PI * f * sin(2 * PI * f * this->get_time());
+        grad[i] = tv;
         for (unsigned int j = 0; j < dim; ++j)
           grad[i] *= (i == j ? cos(2 * PI * f * x[j]) : sin(2 * PI * f * x[j]));
       }
@@ -224,7 +225,6 @@ public:
         error[VectorTools::H1_seminorm] += time_step * tw[q] * h1 * h1;
         numeric.zero_out_ghost_values();
       }
-
     for (unsigned int i = 0; i < x.n_blocks(); ++i)
       x.block(i).zero_out_ghost_values();
     prev_x.zero_out_ghost_values();
@@ -234,7 +234,7 @@ public:
 private:
   TimeStepType           time_step_type;
   QGauss<dim> const      quad_cell;
-  QGauss<dim> const      quad_time;
+  QGauss<1> const        quad_time;
   const Mapping<dim>    &mapping;
   const DoFHandler<dim> &dof_handler;
   Function<dim, Number> &exact_solution;

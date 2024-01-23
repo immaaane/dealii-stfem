@@ -52,13 +52,10 @@ namespace dealii
   get_fe_time_weights(TimeStepType type, unsigned int const r)
   {
     if (type == TimeStepType::CGP)
-      {
-        return split_lhs_rhs(get_cg_weights<Number>(r));
-      }
+      return split_lhs_rhs(get_cg_weights<Number>(r));
     else if (type == TimeStepType::DG)
-      {
-        return split_lhs_rhs(get_dg_weights<Number>(r));
-      }
+      return split_lhs_rhs(get_dg_weights<Number>(r));
+
     return {{FullMatrix<Number>(),
              FullMatrix<Number>(),
              FullMatrix<Number>(),
@@ -70,15 +67,12 @@ namespace dealii
   get_time_basis(TimeStepType type, unsigned int const r)
   {
     if (type == TimeStepType::CGP)
-      {
-        return Polynomials::generate_complete_Lagrange_basis(
-          QGaussLobatto<1>(r + 1).get_points());
-      }
+      return Polynomials::generate_complete_Lagrange_basis(
+        QGaussLobatto<1>(r + 1).get_points());
     else if (type == TimeStepType::DG)
-      {
-        return Polynomials::generate_complete_Lagrange_basis(
-          QGaussRadau<1>(r + 1, QGaussRadau<1>::EndPoint::right).get_points());
-      }
+      return Polynomials::generate_complete_Lagrange_basis(
+        QGaussRadau<1>(r + 1, QGaussRadau<1>::EndPoint::right).get_points());
+
     return {{}};
   }
 
