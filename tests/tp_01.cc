@@ -70,6 +70,7 @@ public:
   {
     const unsigned int n_blocks = src.n_blocks();
 
+    dst = 0.0;
     VectorType tmp;
     K.initialize_dof_vector(tmp);
     for (unsigned int i = 0; i < n_blocks; ++i)
@@ -97,6 +98,7 @@ public:
   {
     const unsigned int n_blocks = src.n_blocks();
 
+    dst = 0.0;
     VectorType tmp;
     K.initialize_dof_vector(tmp);
     for (unsigned int i = 0; i < n_blocks; ++i)
@@ -141,7 +143,7 @@ public:
         M.vmult(tmp, src);
         for (unsigned int j = 0; j < n_blocks; ++j)
           if (Beta(j, 0) != 0.0)
-            dst.block(j).equ(Beta(j, 0), tmp);
+            dst.block(j).add(Beta(j, 0), tmp);
       }
   }
 
@@ -171,21 +173,22 @@ private:
 };
 
 template <typename Number>
-class Smoother : public MGSmoother<BlockVectorType>
+class VankaSmoother : public MGSmoother<BlockVectorType>
 {
 public:
   struct AdditionalData
   {};
   template <int dim>
-  Smoother(MGLevelObject<std::shared_ptr<const SparseMatrixType>> const    &K_,
-           MGLevelObject<std::shared_ptr<const SparseMatrixType>> const    &M_,
-           MGLevelObject<std::shared_ptr<const SparsityPatternType>> const &SP_,
-           const FullMatrix<Number> &Alpha,
-           const FullMatrix<Number> &Beta,
-           MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> const
-             &mg_dof_handlers)
+  VankaSmoother(
+    MGLevelObject<std::shared_ptr<const SparseMatrixType>> const    &K_,
+    MGLevelObject<std::shared_ptr<const SparseMatrixType>> const    &M_,
+    MGLevelObject<std::shared_ptr<const SparsityPatternType>> const &SP_,
+    const FullMatrix<Number>                                        &Alpha,
+    const FullMatrix<Number>                                        &Beta,
+    MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> const
+      &mg_dof_handlers)
     : dealii::MGSmoother<BlockVectorType>(
-        4,     // number of smoothing steps
+        1,     // number of smoothing steps
         true,  // double number of smoothing steps
         false, // symmetric = symmetric smoothing (false)
         false)
@@ -261,33 +264,33 @@ public:
   {
     dst = 0.0;
 
-    Vector<Number> dst_local;
-    Vector<Number> src_local;
-
-
-    const unsigned int n_blocks = src.n_blocks();
+    Vector<Number>     dst_local;
+    Vector<Number>     src_local;
+    auto const        &indices_l = indices[l];
+    auto const        &blocks_l  = blocks[l];
+    const unsigned int n_blocks  = src.n_blocks();
     for (unsigned int i = 0; i < n_blocks; ++i)
       src.block(i).update_ghost_values();
 
-    for (unsigned int i = 0; i < blocks[l].size(); ++i)
+    for (unsigned int i = 0; i < blocks_l.size(); ++i)
       {
         // gather
-        src_local.reinit(blocks[l][i].m());
-        dst_local.reinit(blocks[l][i].m());
+        src_local.reinit(blocks_l[i].m());
+        dst_local.reinit(blocks_l[i].m());
 
         for (unsigned int b = 0, c = 0; b < n_blocks; ++b)
-          for (unsigned int j = 0; j < indices[l][i].size(); ++j, ++c)
-            src_local[c] = src.block(b)[indices[l][i][j]];
+          for (unsigned int j = 0; j < indices_l[i].size(); ++j, ++c)
+            src_local[c] = src.block(b)[indices_l[i][j]];
 
         // patch solver
-        blocks[l][i].vmult(dst_local, src_local);
+        blocks_l[i].vmult(dst_local, src_local);
 
         // scatter
         for (unsigned int b = 0, c = 0; b < n_blocks; ++b)
-          for (unsigned int j = 0; j < indices[l][i].size(); ++j, ++c)
+          for (unsigned int j = 0; j < indices_l[i].size(); ++j, ++c)
             {
-              Number const weight = damp / valence[l][indices[l][i][j]];
-              dst.block(b)[indices[l][i][j]] += weight * dst_local[c];
+              Number const weight = damp / valence[l][indices_l[i][j]];
+              dst.block(b)[indices_l[i][j]] += weight * dst_local[c];
             }
       }
 
@@ -626,6 +629,12 @@ public:
     rhs_matrix.vmult(rhs, prev_x);
 
     assemble_force(rhs, time, time_step);
+
+    // constant extrapolation of solution from last time
+    for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
+      {
+        x.block(j) = prev_x;
+      }
     try
       {
         solver.solve(matrix, x, rhs, preconditioner);
@@ -866,7 +875,7 @@ test(dealii::ConditionalOStream const &pcout,
       }
 
     std::shared_ptr<MGSmoother<BlockVectorType>> smoother =
-      std::make_shared<Smoother<Number>>(
+      std::make_shared<VankaSmoother<Number>>(
         mg_K, mg_M, mg_sparsity_patterns, Alpha, Beta, mg_dof_handlers);
     // std::shared_ptr<MGSmootherBase<BlockVectorType>> smoother =
     //   std::make_shared<MGSmootherIdentity<BlockVectorType>>();
@@ -946,7 +955,6 @@ test(dealii::ConditionalOStream const &pcout,
                                      *preconditioner,
                                      rhs_matrix,
                                      integrate_rhs_function);
-
     // interpolate initial value
     evaluate_exact_solution(0, x.block(x.n_blocks() - 1));
     double l2 = 0., l8 = -1., h1_semi = 0.;
@@ -955,7 +963,6 @@ test(dealii::ConditionalOStream const &pcout,
         ++timestep_number;
         dealii::deallog << "Step " << timestep_number << " t = " << time
                         << std::endl;
-
         prev_x = x.block(x.n_blocks() - 1);
         step.solve(x, prev_x, timestep_number, time, time_step_size);
         for (unsigned int i = 0; i < n_blocks; ++i)
@@ -1006,14 +1013,20 @@ test(dealii::ConditionalOStream const &pcout,
     table.add_value("L2-L2", std::sqrt(l2));
     table.add_value("L2-H1_semi", std::sqrt(h1_semi));
   };
-  for (int j = 0; j < 2; ++j)
+  for (int j = 0; j < 3; ++j)
     {
-      for (int i = 1; i < 5; ++i)
+      for (int i = 2; i < 6; ++i)
         {
           convergence_test(i,
                            type == TimeStepType::DG ? j : j + 1,
                            j == 2 && i == 4);
         }
+      table.set_precision("L\u221E-L\u221E", 5);
+      table.set_precision("L2-L2", 5);
+      table.set_precision("L2-H1_semi", 5);
+      table.set_scientific("L\u221E-L\u221E", true);
+      table.set_scientific("L2-L2", true);
+      table.set_scientific("L2-H1_semi", true);
       table.evaluate_convergence_rates("L\u221E-L\u221E",
                                        ConvergenceTable::reduction_rate_log2);
       table.evaluate_convergence_rates("L2-L2",
