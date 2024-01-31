@@ -1,6 +1,7 @@
 #include <deal.II/base/conditional_ostream.h>
 #include <deal.II/base/convergence_table.h>
 #include <deal.II/base/quadrature_lib.h>
+#include <deal.II/base/timer.h>
 
 #include <deal.II/distributed/repartitioning_policy_tools.h>
 #include <deal.II/distributed/tria.h>
@@ -53,11 +54,13 @@ template <typename Number, typename SystemMatrixType>
 class SystemMatrix
 {
 public:
-  SystemMatrix(const SystemMatrixType   &K,
+  SystemMatrix(TimerOutput              &timer,
+               const SystemMatrixType   &K,
                const SystemMatrixType   &M,
                const FullMatrix<Number> &Alpha_,
                const FullMatrix<Number> &Beta_)
-    : K(K)
+    : timer(timer)
+    , K(K)
     , M(M)
     , Alpha(Alpha_)
     , Beta(Beta_)
@@ -68,6 +71,8 @@ public:
   void
   vmult(BlockVectorType &dst, const BlockVectorType &src) const
   {
+    TimerOutput::Scope scope(timer, "vmult");
+
     const unsigned int n_blocks = src.n_blocks();
 
     dst = 0.0;
@@ -96,6 +101,8 @@ public:
   void
   Tvmult(BlockVectorType &dst, const BlockVectorType &src) const
   {
+    TimerOutput::Scope scope(timer, "Tvmult");
+
     const unsigned int n_blocks = src.n_blocks();
 
     dst = 0.0;
@@ -125,6 +132,8 @@ public:
   void
   vmult(BlockVectorType &dst, const VectorType &src) const
   {
+    TimerOutput::Scope scope(timer, "vmult");
+
     const unsigned int n_blocks = dst.n_blocks();
 
     VectorType tmp;
@@ -162,6 +171,7 @@ public:
   }
 
 private:
+  TimerOutput              &timer;
   const SystemMatrixType   &K;
   const SystemMatrixType   &M;
   const FullMatrix<Number> &Alpha;
@@ -180,6 +190,7 @@ public:
   {};
   template <int dim>
   VankaSmoother(
+    TimerOutput                                                     &timer,
     MGLevelObject<std::shared_ptr<const SparseMatrixType>> const    &K_,
     MGLevelObject<std::shared_ptr<const SparseMatrixType>> const    &M_,
     MGLevelObject<std::shared_ptr<const SparsityPatternType>> const &SP_,
@@ -192,6 +203,7 @@ public:
         true,  // double number of smoothing steps
         false, // symmetric = symmetric smoothing (false)
         false)
+    , timer(timer)
     , indices(mg_dof_handlers.min_level(), mg_dof_handlers.max_level())
     , valence(mg_dof_handlers.min_level(), mg_dof_handlers.max_level())
     , blocks(mg_dof_handlers.min_level(), mg_dof_handlers.max_level())
@@ -262,6 +274,8 @@ public:
   void
   vmult(unsigned int l, BlockVectorType &dst, const BlockVectorType &src) const
   {
+    TimerOutput::Scope scope(timer, "vanka");
+
     dst = 0.0;
 
     Vector<Number>     dst_local;
@@ -314,6 +328,8 @@ public:
 
 
 private:
+  TimerOutput &timer;
+
   AdditionalData additional_data;
   Number         damp = 1.0;
   MGLevelObject<std::vector<std::vector<types::global_dof_index>>> indices;
@@ -341,14 +357,16 @@ class GMG
   using MGTransferType = MGTransferBlockGlobalCoarsening<dim, VectorType>;
 
 public:
-  GMG(const DoFHandler<dim> &dof_handler,
+  GMG(TimerOutput           &timer,
+      const DoFHandler<dim> &dof_handler,
       const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>>
         &mg_dof_handlers,
       const MGLevelObject<std::shared_ptr<const AffineConstraints<Number>>>
         &mg_constraints,
       const MGLevelObject<std::shared_ptr<const LevelMatrixType>> &mg_operators,
       const std::shared_ptr<MGSmootherBase<BlockVectorType>>      &mg_smoother_)
-    : dof_handler(dof_handler)
+    : timer(timer)
+    , dof_handler(dof_handler)
     , mg_dof_handlers(mg_dof_handlers)
     , mg_constraints(mg_constraints)
     , mg_operators(mg_operators)
@@ -426,6 +444,7 @@ public:
   void
   vmult(BlockVectorType &dst, const BlockVectorType &src) const
   {
+    TimerOutput::Scope scope(timer, "gmg");
     preconditioner->vmult(dst, src);
   }
 
@@ -439,6 +458,8 @@ public:
   }
 
 private:
+  TimerOutput &timer;
+
   // using SmootherPreconditionerType = DiagonalMatrix<VectorType>;
   const DoFHandler<dim>                                      &dof_handler;
   const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers;
@@ -699,9 +720,9 @@ private:
 
 template <int dim>
 void
-test(dealii::ConditionalOStream const &pcout,
-     MPI_Comm const                    comm_global,
-     TimeStepType                      type)
+test(dealii::ConditionalOStream &pcout,
+     MPI_Comm const              comm_global,
+     TimeStepType                type)
 {
   ConvergenceTable table;
   MappingQ1<dim>   mapping;
@@ -782,11 +803,14 @@ test(dealii::ConditionalOStream const &pcout,
     if (type == TimeStepType::CGP)
       Gamma *= time_step_size;
 
-    SystemMatrix<Number, MatrixFreeOperator<dim, Number>> matrix(K_mf,
-                                                                 M_mf,
-                                                                 Alpha,
-                                                                 Beta);
+    TimerOutput timer(pcout,
+                      TimerOutput::never,
+                      TimerOutput::cpu_and_wall_times);
+
+    SystemMatrix<Number, MatrixFreeOperator<dim, Number>> matrix(
+      timer, K_mf, M_mf, Alpha, Beta);
     SystemMatrix<Number, MatrixFreeOperator<dim, Number>> rhs_matrix(
+      timer,
       K_mf,
       M_mf,
       (type == TimeStepType::CGP) ? Gamma : Zeta,
@@ -842,10 +866,8 @@ test(dealii::ConditionalOStream const &pcout,
           mapping, *dof_handler_, *constraints_, quad, 1.0, 0.0);
 
         mg_operators[l] = std::make_shared<
-          SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(*K_mf_,
-                                                                 *M_mf_,
-                                                                 Alpha,
-                                                                 Beta);
+          SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
+          timer, *K_mf_, *M_mf_, Alpha, Beta);
 
         auto sparsity_pattern_ = std::make_shared<SparsityPatternType>(
           dof_handler_->locally_owned_dofs(),
@@ -876,12 +898,17 @@ test(dealii::ConditionalOStream const &pcout,
 
     std::shared_ptr<MGSmoother<BlockVectorType>> smoother =
       std::make_shared<VankaSmoother<Number>>(
-        mg_K, mg_M, mg_sparsity_patterns, Alpha, Beta, mg_dof_handlers);
+        timer, mg_K, mg_M, mg_sparsity_patterns, Alpha, Beta, mg_dof_handlers);
     // std::shared_ptr<MGSmootherBase<BlockVectorType>> smoother =
     //   std::make_shared<MGSmootherIdentity<BlockVectorType>>();
     auto preconditioner = std::make_unique<
       GMG<dim, SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>>(
-      dof_handler, mg_dof_handlers, mg_constraints, mg_operators, smoother);
+      timer,
+      dof_handler,
+      mg_dof_handlers,
+      mg_constraints,
+      mg_operators,
+      smoother);
     preconditioner->reinit();
     //
     /// GMG
@@ -960,6 +987,8 @@ test(dealii::ConditionalOStream const &pcout,
     double l2 = 0., l8 = -1., h1_semi = 0.;
     while (time < end_time)
       {
+        TimerOutput::Scope scope(timer, "step");
+
         ++timestep_number;
         dealii::deallog << "Step " << timestep_number << " t = " << time
                         << std::endl;
@@ -1002,6 +1031,8 @@ test(dealii::ConditionalOStream const &pcout,
             data_out.write_vtu(output);
           }
       }
+
+    timer.print_wall_time_statistics(MPI_COMM_WORLD);
 
     unsigned int const n_active_cells = tria.n_active_cells();
     unsigned int const n_dofs         = dof_handler.n_dofs();
