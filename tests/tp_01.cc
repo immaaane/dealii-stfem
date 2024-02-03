@@ -1033,7 +1033,7 @@ test(dealii::ConditionalOStream &pcout,
           }
       }
 
-    if(print_timing)
+    if (print_timing)
       timer.print_wall_time_statistics(MPI_COMM_WORLD);
 
     unsigned int const n_active_cells = tria.n_active_cells();
