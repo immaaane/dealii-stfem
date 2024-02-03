@@ -727,6 +727,7 @@ test(dealii::ConditionalOStream &pcout,
   ConvergenceTable table;
   MappingQ1<dim>   mapping;
 
+  const bool print_timing = false;
 
   auto convergence_test = [&](int const          refinement,
                               unsigned int const fe_degree,
@@ -1032,7 +1033,8 @@ test(dealii::ConditionalOStream &pcout,
           }
       }
 
-    timer.print_wall_time_statistics(MPI_COMM_WORLD);
+    if(print_timing)
+      timer.print_wall_time_statistics(MPI_COMM_WORLD);
 
     unsigned int const n_active_cells = tria.n_active_cells();
     unsigned int const n_dofs         = dof_handler.n_dofs();
