@@ -24,6 +24,77 @@ namespace dealii
   std::array<FullMatrix<Number>, 2>
   get_cg_weights(unsigned int const r);
 
+  template <typename Number>
+  std::array<FullMatrix<Number>, 4>
+  get_fe_time_weights(TimeStepType type, unsigned int const r);
+
+  template <typename Number>
+  std::array<FullMatrix<Number>, 5>
+  get_fe_time_weights_wave(TimeStepType              type,
+                           FullMatrix<Number> const &Alpha,
+                           FullMatrix<Number> const &Beta,
+                           FullMatrix<Number> const &Gamma,
+                           FullMatrix<Number> const &Zeta)
+  {
+    if (type == TimeStepType::CGP)
+      {
+        std::array<FullMatrix<Number>, 5> ret;
+        ret[0] = Alpha;
+
+        FullMatrix<Number> Alpha_inv(Alpha.m(), Alpha.n());
+        Alpha_inv.invert(Alpha);
+
+        FullMatrix<Number> BxAixB(Alpha.m(), Alpha.n());
+        BxAixB.triple_product(Alpha_inv, Beta, Beta);
+        ret[1] = BxAixB;
+
+        // u0 stiff
+        ret[2] = Gamma;
+        // u0 mass
+        FullMatrix<Number> BxAixZ(Zeta.m(), Zeta.n());
+        BxAixZ.triple_product(Alpha_inv, Beta, Zeta);
+        ret[3] = BxAixZ;
+
+        // V0
+        FullMatrix<Number> BxAixG(Gamma.m(), Gamma.n());
+        BxAixG.triple_product(Alpha_inv, Beta, Gamma);
+        FullMatrix<Number> ZmBxAixG = Zeta;
+        ZmBxAixG.add(-1.0, BxAixG);
+        ret[4] = ZmBxAixG;
+        return ret;
+      }
+    else if (type == TimeStepType::DG)
+      {
+        std::array<FullMatrix<Number>, 5> ret;
+        ret[0] = Alpha;
+
+        FullMatrix<Number> Alpha_inv(Alpha.m(), Alpha.n());
+        Alpha_inv.invert(Alpha);
+
+        FullMatrix<Number> BxAixB(Alpha.m(), Alpha.n());
+        // Note that the order of the arguments is not the order of the mmults:
+        // Alpha_inv, Beta, Beta corresponds to Beta*Alpha_inv*Beta
+        // Generally A,B,D -> B*A*D.
+        BxAixB.triple_product(Alpha_inv, Beta, Beta);
+        ret[1] = BxAixB;
+
+        // u0 stiff
+        ret[2] = FullMatrix<Number>(Gamma.m(), Gamma.n());
+        // u0 mass
+        FullMatrix<Number> BxAixG(Gamma.m(), Gamma.n());
+        BxAixG.triple_product(Alpha_inv, Beta, Gamma);
+        ret[3] = BxAixG;
+        // V0
+        ret[4] = Gamma;
+        return ret;
+      }
+    return {{FullMatrix<Number>(),
+             FullMatrix<Number>(),
+             FullMatrix<Number>(),
+             FullMatrix<Number>(),
+             FullMatrix<Number>()}};
+  }
+
 
   /** Generates the time integration weights for time continuous Galerkin-Petrov
    * discretizations or time discontinuous Galerkin discretizations

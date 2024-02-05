@@ -50,6 +50,45 @@ using BlockVectorType     = LinearAlgebra::distributed::BlockVector<double>;
 using SparseMatrixType    = TrilinosWrappers::SparseMatrix;
 using SparsityPatternType = TrilinosWrappers::SparsityPattern;
 
+enum class ProblemType : unsigned int
+{
+  heat = 1,
+  wave = 2,
+};
+
+BlockVectorType
+operator*(const FullMatrix<Number> &A, VectorType const &b)
+{
+  const unsigned int n_blocks = A.m();
+
+  BlockVectorType c(n_blocks);
+  for (unsigned int i = 0; i < n_blocks; ++i)
+    c.block(i) = b;
+  c = 0.0;
+
+  for (unsigned int i = 0; i < n_blocks; ++i)
+    {
+      if (A(i, 0) != 0.0)
+        c.block(i).add(A(i, 0), b);
+    }
+  return c;
+}
+
+BlockVectorType
+operator*(const FullMatrix<Number> &A, BlockVectorType const &b)
+{
+  const unsigned int n_blocks = b.n_blocks();
+
+  BlockVectorType c = b;
+
+  c = 0.0;
+  for (unsigned int i = 0; i < n_blocks; ++i)
+    for (unsigned int j = 0; j < n_blocks; ++j)
+      if (A(i, j) != 0.0)
+        c.block(i).add(A(i, j), b.block(j));
+  return c;
+}
+
 template <typename Number, typename SystemMatrixType>
 class SystemMatrix
 {
@@ -130,7 +169,7 @@ public:
 
   // Specialization for a nx1 matrix. Useful for rhs assembly
   void
-  vmult(BlockVectorType &dst, const VectorType &src) const
+  vmult_add(BlockVectorType &dst, const VectorType &src) const
   {
     TimerOutput::Scope scope(timer, "vmult");
 
@@ -143,7 +182,7 @@ public:
         K.vmult(tmp, src);
         for (unsigned int j = 0; j < n_blocks; ++j)
           if (Alpha(j, 0) != 0.0)
-            dst.block(j).equ(Alpha(j, 0), tmp);
+            dst.block(j).add(Alpha(j, 0), tmp);
       }
 
     if (!beta_is_zero)
@@ -154,6 +193,13 @@ public:
           if (Beta(j, 0) != 0.0)
             dst.block(j).add(Beta(j, 0), tmp);
       }
+  }
+
+  void
+  vmult(BlockVectorType &dst, const VectorType &src) const
+  {
+    dst = 0.0;
+    vmult_add(dst, src);
   }
 
   void
@@ -604,9 +650,7 @@ public:
     TimeStepType              type_,
     unsigned int              time_degree_,
     FullMatrix<Number> const &Alpha_,
-    FullMatrix<Number> const &Beta_,
     FullMatrix<Number> const &Gamma_,
-    FullMatrix<Number> const &Zeta_,
     double const              gmres_tolerance_,
     SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix_,
     GMG<dim, SystemMatrix<Number, MatrixFreeOperator<dim, Number>>> const
@@ -616,8 +660,6 @@ public:
     : type(type_)
     , time_degree(time_degree_)
     , Alpha(Alpha_)
-    , Beta(Beta_)
-    , Zeta(Zeta_)
     , Gamma(Gamma_)
     , solver_control(1000, 1.e-16, gmres_tolerance_, true, true)
     , solver(solver_control,
@@ -635,36 +677,6 @@ public:
       quad_time = QGaussLobatto<1>(time_degree + 1);
   }
 
-  void
-  solve(BlockVectorType                    &x,
-        VectorType const                   &prev_x,
-        [[maybe_unused]] const unsigned int timestep_number,
-        const double                        time,
-        const double                        time_step) const
-  {
-    BlockVectorType rhs(x.n_blocks());
-    for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
-      {
-        matrix.initialize_dof_vector(rhs.block(j));
-      }
-    rhs_matrix.vmult(rhs, prev_x);
-
-    assemble_force(rhs, time, time_step);
-
-    // constant extrapolation of solution from last time
-    for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
-      {
-        x.block(j) = prev_x;
-      }
-    try
-      {
-        solver.solve(matrix, x, rhs, preconditioner);
-      }
-    catch (const SolverControl::NoConvergence &e)
-      {
-        AssertThrow(false, ExcMessage(e.what()));
-      }
-  }
   void
   assemble_force(BlockVectorType &rhs,
                  double const     time,
@@ -700,13 +712,11 @@ public:
       }
   }
 
-private:
+protected:
   TimeStepType              type;
   unsigned int              time_degree;
   Quadrature<1>             quad_time;
   FullMatrix<Number> const &Alpha;
-  FullMatrix<Number> const &Beta;
-  FullMatrix<Number> const &Zeta;
   FullMatrix<Number> const &Gamma;
 
   mutable ReductionControl              solver_control;
@@ -718,11 +728,158 @@ private:
   std::function<void(const double, VectorType &)> integrate_rhs_function;
 };
 
+
+template <int dim, typename Number>
+class TimeIntegratorHeat : public TimeIntegrator<dim, Number>
+{
+public:
+  TimeIntegratorHeat(
+    TimeStepType              type_,
+    unsigned int              time_degree_,
+    FullMatrix<Number> const &Alpha_,
+    FullMatrix<Number> const &Gamma_,
+    double const              gmres_tolerance_,
+    SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix_,
+    GMG<dim, SystemMatrix<Number, MatrixFreeOperator<dim, Number>>> const
+      &preconditioner_,
+    SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix_,
+    std::function<void(const double, VectorType &)> integrate_rhs_function)
+    : TimeIntegrator<dim, Number>(type_,
+                                  time_degree_,
+                                  Alpha_,
+                                  Gamma_,
+                                  gmres_tolerance_,
+                                  matrix_,
+                                  preconditioner_,
+                                  rhs_matrix_,
+                                  integrate_rhs_function)
+  {}
+
+  void
+  solve(BlockVectorType                    &x,
+        VectorType const                   &prev_x,
+        [[maybe_unused]] const unsigned int timestep_number,
+        const double                        time,
+        const double                        time_step) const
+  {
+    BlockVectorType rhs(x.n_blocks());
+    for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
+      this->matrix.initialize_dof_vector(rhs.block(j));
+    this->rhs_matrix.vmult(rhs, prev_x);
+
+    this->assemble_force(rhs, time, time_step);
+
+    // constant extrapolation of solution from last time
+    for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
+      {
+        x.block(j) = prev_x;
+      }
+    try
+      {
+        this->solver.solve(this->matrix, x, rhs, this->preconditioner);
+      }
+    catch (const SolverControl::NoConvergence &e)
+      {
+        AssertThrow(false, ExcMessage(e.what()));
+      }
+  }
+};
+
+template <int dim, typename Number>
+class TimeIntegratorWave : public TimeIntegrator<dim, Number>
+{
+public:
+  TimeIntegratorWave(
+    TimeStepType              type_,
+    unsigned int              time_degree_,
+    FullMatrix<Number> const &Alpha_,
+    FullMatrix<Number> const &Beta_,
+    FullMatrix<Number> const &Gamma_,
+    FullMatrix<Number> const &Zeta_,
+    double const              gmres_tolerance_,
+    SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix_,
+    GMG<dim, SystemMatrix<Number, MatrixFreeOperator<dim, Number>>> const
+      &preconditioner_,
+    SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix_,
+    SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix_v_,
+    std::function<void(const double, VectorType &)> integrate_rhs_function)
+    : TimeIntegrator<dim, Number>(type_,
+                                  time_degree_,
+                                  Alpha_,
+                                  Gamma_,
+                                  gmres_tolerance_,
+                                  matrix_,
+                                  preconditioner_,
+                                  rhs_matrix_,
+                                  integrate_rhs_function)
+    , rhs_matrix_v(rhs_matrix_v_)
+    , Beta(Beta_)
+    , Zeta(Zeta_)
+    , Alpha_inv(this->Alpha)
+    , AixB(this->Alpha.m(), this->Alpha.n())
+    , AixG(this->Alpha.m(), this->Gamma.n())
+    , AixZ(this->Alpha.m(), this->Zeta.n())
+  {
+    Alpha_inv.gauss_jordan();
+    Alpha_inv.mmult(this->AixB, this->Beta);
+    Alpha_inv.mmult(this->AixG, this->Gamma);
+    Alpha_inv.mmult(this->AixZ, this->Zeta);
+  }
+
+  void
+  solve(BlockVectorType                    &u,
+        BlockVectorType                    &v,
+        VectorType const                   &prev_u,
+        VectorType const                   &prev_v,
+        [[maybe_unused]] const unsigned int timestep_number,
+        const double                        time,
+        const double                        time_step) const
+  {
+    BlockVectorType rhs(u.n_blocks());
+    for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
+      this->matrix.initialize_dof_vector(rhs.block(j));
+
+    this->rhs_matrix.vmult(rhs, prev_u);
+    this->rhs_matrix_v.vmult_add(rhs, prev_v);
+    this->assemble_force(rhs, time, time_step);
+
+    // constant extrapolation of solution from last time
+    for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
+      u.block(j) = prev_u;
+    try
+      {
+        this->solver.solve(this->matrix, u, rhs, this->preconditioner);
+      }
+    catch (const SolverControl::NoConvergence &e)
+      {
+        AssertThrow(false, ExcMessage(e.what()));
+      }
+    v = AixB * u;
+    if (this->type == TimeStepType::DG)
+      v.add(-1.0, AixG * prev_u);
+    else
+      v.add(-1.0, AixZ * prev_u, 1.0, AixG * prev_v);
+  }
+
+private:
+  SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix_v;
+
+  FullMatrix<Number> const &Beta;
+  FullMatrix<Number> const &Zeta;
+
+  FullMatrix<Number> Alpha_inv;
+  FullMatrix<Number> AixB;
+  FullMatrix<Number> AixG;
+  FullMatrix<Number> AixZ;
+};
+
 template <int dim>
 void
+
 test(dealii::ConditionalOStream &pcout,
      MPI_Comm const              comm_global,
-     TimeStepType                type)
+     TimeStepType const          type,
+     ProblemType const           problem)
 {
   ConvergenceTable table;
   MappingQ1<dim>   mapping;
@@ -778,6 +935,7 @@ test(dealii::ConditionalOStream &pcout,
     double time           = 0.;
     double time_step_size = 1.0 * pow(2.0, -(refinement + 1));
     double end_time       = 1.;
+    Number frequency      = 1.0;
 
     // matrix-free operators
     MatrixFreeOperator<dim, Number> K_mf(
@@ -808,14 +966,38 @@ test(dealii::ConditionalOStream &pcout,
                       TimerOutput::never,
                       TimerOutput::cpu_and_wall_times);
 
-    SystemMatrix<Number, MatrixFreeOperator<dim, Number>> matrix(
-      timer, K_mf, M_mf, Alpha, Beta);
-    SystemMatrix<Number, MatrixFreeOperator<dim, Number>> rhs_matrix(
-      timer,
-      K_mf,
-      M_mf,
-      (type == TimeStepType::CGP) ? Gamma : Zeta,
-      (type == TimeStepType::CGP) ? Zeta : Gamma);
+    FullMatrix<Number> lhs_uK, lhs_uM, rhs_uK, rhs_uM, rhs_vM,
+      zero(Gamma.m(), Gamma.n());
+    std::unique_ptr<SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>
+      rhs_matrix, rhs_matrix_v, matrix;
+    if (problem == ProblemType::wave)
+      {
+        auto [Alpha_lhs, Beta_lhs, rhs_uK_, rhs_uM_, rhs_vM_] =
+          get_fe_time_weights_wave(type, Alpha, Beta, Gamma, Zeta);
+
+        lhs_uK = Alpha_lhs;
+        lhs_uM = Beta_lhs;
+        rhs_uK = rhs_uK_;
+        rhs_uM = rhs_uM_;
+        rhs_vM = rhs_vM_;
+
+        rhs_matrix_v = std::make_unique<
+          SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
+          timer, K_mf, M_mf, zero, rhs_vM);
+      }
+    else
+      {
+        lhs_uK = Alpha;
+        lhs_uM = Beta;
+        rhs_uK = (type == TimeStepType::CGP) ? Gamma : zero;
+        rhs_uM = (type == TimeStepType::CGP) ? Zeta : Gamma;
+      }
+    matrix =
+      std::make_unique<SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
+        timer, K_mf, M_mf, lhs_uK, lhs_uM);
+    rhs_matrix =
+      std::make_unique<SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
+        timer, K_mf, M_mf, rhs_uK, rhs_uM);
 
     /// GMG
     RepartitioningPolicyTools::DefaultPolicy<dim>          policy(true);
@@ -866,9 +1048,10 @@ test(dealii::ConditionalOStream &pcout,
         auto M_mf_ = std::make_shared<MatrixFreeOperator<dim, Number>>(
           mapping, *dof_handler_, *constraints_, quad, 1.0, 0.0);
 
+
         mg_operators[l] = std::make_shared<
           SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
-          timer, *K_mf_, *M_mf_, Alpha, Beta);
+          timer, *K_mf_, *M_mf_, lhs_uK, lhs_uM);
 
         auto sparsity_pattern_ = std::make_shared<SparsityPatternType>(
           dof_handler_->locally_owned_dofs(),
@@ -898,8 +1081,13 @@ test(dealii::ConditionalOStream &pcout,
       }
 
     std::shared_ptr<MGSmoother<BlockVectorType>> smoother =
-      std::make_shared<VankaSmoother<Number>>(
-        timer, mg_K, mg_M, mg_sparsity_patterns, Alpha, Beta, mg_dof_handlers);
+      std::make_shared<VankaSmoother<Number>>(timer,
+                                              mg_K,
+                                              mg_M,
+                                              mg_sparsity_patterns,
+                                              lhs_uK,
+                                              lhs_uM,
+                                              mg_dof_handlers);
     // std::shared_ptr<MGSmootherBase<BlockVectorType>> smoother =
     //   std::make_shared<MGSmootherIdentity<BlockVectorType>>();
     auto preconditioner = std::make_unique<
@@ -915,22 +1103,40 @@ test(dealii::ConditionalOStream &pcout,
     /// GMG
 
     // Number                      frequency = 1.0;
-    RHSFunction<dim, Number>   rhs_function;
-    ExactSolution<dim, Number> exact_solution;
-
+    std::unique_ptr<Function<dim, Number>> rhs_function;
+    std::unique_ptr<Function<dim, Number>>
+      exact_solution = std::make_unique<ExactSolution<dim, Number>>(frequency),
+      exact_solution_v;
+    if (problem == ProblemType::wave)
+      {
+        rhs_function =
+          std::make_unique<wave::RHSFunction<dim, Number>>(frequency);
+        exact_solution_v =
+          std::make_unique<wave::ExactSolutionV<dim, Number>>(frequency);
+      }
+    else
+      {
+        rhs_function = std::make_unique<RHSFunction<dim, Number>>(frequency);
+      }
     auto integrate_rhs_function =
       [&mapping, &dof_handler, &quad, &rhs_function, &constraints](
         const double time, VectorType &rhs) -> void {
-      rhs_function.set_time(time);
+      rhs_function->set_time(time);
       rhs = 0.0;
       VectorTools::create_right_hand_side(
-        mapping, dof_handler, quad, rhs_function, rhs, constraints);
+        mapping, dof_handler, quad, *rhs_function, rhs, constraints);
     };
     [[maybe_unused]] auto evaluate_exact_solution =
       [&mapping, &dof_handler, &exact_solution](const double time,
                                                 VectorType  &tmp) -> void {
-      exact_solution.set_time(time);
-      VectorTools::interpolate(mapping, dof_handler, exact_solution, tmp);
+      exact_solution->set_time(time);
+      VectorTools::interpolate(mapping, dof_handler, *exact_solution, tmp);
+    };
+    [[maybe_unused]] auto evaluate_exact_v_solution =
+      [&mapping, &dof_handler, &exact_solution_v](const double time,
+                                                  VectorType  &tmp) -> void {
+      exact_solution_v->set_time(time);
+      VectorTools::interpolate(mapping, dof_handler, *exact_solution_v, tmp);
     };
     auto evaluate_numerical_solution =
       [&constraints, &basis, &type](const double           time,
@@ -953,15 +1159,22 @@ test(dealii::ConditionalOStream &pcout,
       constraints.distribute(tmp);
     };
 
-    BlockVectorType x(n_blocks);
+    BlockVectorType x(n_blocks), v(n_blocks);
     for (unsigned int i = 0; i < n_blocks; ++i)
-      matrix.initialize_dof_vector(x.block(i));
-    VectorType prev_x;
-    matrix.initialize_dof_vector(prev_x);
+      matrix->initialize_dof_vector(x.block(i));
+    VectorType prev_x, prev_v, prev_w;
+    matrix->initialize_dof_vector(prev_x);
+    if (problem == ProblemType::wave)
+      {
+        matrix->initialize_dof_vector(prev_v);
+        for (unsigned int i = 0; i < n_blocks; ++i)
+          matrix->initialize_dof_vector(v.block(i));
+      }
+
     VectorType exact;
-    matrix.initialize_dof_vector(exact);
+    matrix->initialize_dof_vector(exact);
     VectorType numeric;
-    matrix.initialize_dof_vector(numeric);
+    matrix->initialize_dof_vector(numeric);
 
     unsigned int                 timestep_number = 0;
     ErrorCalculator<dim, Number> error_calculator(type,
@@ -969,23 +1182,42 @@ test(dealii::ConditionalOStream &pcout,
                                                   fe_degree,
                                                   mapping,
                                                   dof_handler,
-                                                  exact_solution,
+                                                  *exact_solution,
                                                   evaluate_numerical_solution);
 
-    TimeIntegrator<dim, Number> step(type,
-                                     fe_degree,
-                                     Alpha,
-                                     Beta,
-                                     Gamma,
-                                     Zeta,
-                                     1.e-12,
-                                     matrix,
-                                     *preconditioner,
-                                     rhs_matrix,
-                                     integrate_rhs_function);
+    std::unique_ptr<TimeIntegrator<dim, Number>> step;
+    if (problem == ProblemType::heat)
+      step = std::make_unique<TimeIntegratorHeat<dim, Number>>(
+        type,
+        fe_degree,
+        Alpha,
+        Gamma,
+        1.e-12,
+        *matrix,
+        *preconditioner,
+        *rhs_matrix,
+        integrate_rhs_function);
+    else
+      step = std::make_unique<TimeIntegratorWave<dim, Number>>(
+        type,
+        fe_degree,
+        Alpha,
+        Beta,
+        Gamma,
+        Zeta,
+        1.e-12,
+        *matrix,
+        *preconditioner,
+        *rhs_matrix,
+        *rhs_matrix_v,
+        integrate_rhs_function);
+
     // interpolate initial value
     evaluate_exact_solution(0, x.block(x.n_blocks() - 1));
+    if (problem == ProblemType::wave)
+      evaluate_exact_v_solution(0, v.block(v.n_blocks() - 1));
     double l2 = 0., l8 = -1., h1_semi = 0.;
+    int    i = 0;
     while (time < end_time)
       {
         TimerOutput::Scope scope(timer, "step");
@@ -994,7 +1226,16 @@ test(dealii::ConditionalOStream &pcout,
         dealii::deallog << "Step " << timestep_number << " t = " << time
                         << std::endl;
         prev_x = x.block(x.n_blocks() - 1);
-        step.solve(x, prev_x, timestep_number, time, time_step_size);
+        if (problem == ProblemType::heat)
+          static_cast<TimeIntegratorHeat<dim, Number> const *>(step.get())
+            ->solve(x, prev_x, timestep_number, time, time_step_size);
+        else
+          {
+            prev_v = v.block(v.n_blocks() - 1);
+            static_cast<TimeIntegratorWave<dim, Number> const *>(step.get())
+              ->solve(
+                x, v, prev_x, prev_v, timestep_number, time, time_step_size);
+          }
         for (unsigned int i = 0; i < n_blocks; ++i)
           constraints.distribute(x.block(i));
 
@@ -1005,6 +1246,7 @@ test(dealii::ConditionalOStream &pcout,
         l2 += error_on_In[VectorTools::L2_norm];
         l8 = std::max(error_on_In[VectorTools::Linfty_norm], l8);
         h1_semi += error_on_In[VectorTools::H1_seminorm];
+        ++i;
         if (do_output)
           {
             numeric = 0.0;
@@ -1019,6 +1261,7 @@ test(dealii::ConditionalOStream &pcout,
                                  ".vtu");
             data_out.write_vtu(output);
           }
+#ifdef DEBUG
         if (do_output)
           {
             exact = 0.0;
@@ -1031,6 +1274,7 @@ test(dealii::ConditionalOStream &pcout,
               "exact." + Utilities::int_to_string(timestep_number, 4) + ".vtu");
             data_out.write_vtu(output);
           }
+#endif
       }
 
     if (print_timing)
@@ -1041,7 +1285,7 @@ test(dealii::ConditionalOStream &pcout,
     table.add_value("cells", n_active_cells);
     table.add_value("s-dofs", n_dofs);
     table.add_value("t-dofs", n_blocks);
-    table.add_value("st-dofs", n_dofs * n_blocks);
+    table.add_value("st-dofs", i * n_dofs * n_blocks);
     table.add_value("L\u221E-L\u221E", l8);
     table.add_value("L2-L2", std::sqrt(l2));
     table.add_value("L2-H1_semi", std::sqrt(h1_semi));
@@ -1049,11 +1293,8 @@ test(dealii::ConditionalOStream &pcout,
   for (int j = 0; j < 3; ++j)
     {
       for (int i = 2; i < 6; ++i)
-        {
-          convergence_test(i,
-                           type == TimeStepType::DG ? j : j + 1,
-                           j == 2 && i == 4);
-        }
+        convergence_test(i, type == TimeStepType::DG ? j : j + 1, false);
+
       table.set_precision("L\u221E-L\u221E", 5);
       table.set_precision("L2-L2", 5);
       table.set_precision("L2-H1_semi", 5);
@@ -1090,9 +1331,12 @@ main(int argc, char **argv)
   dealii::deallog.depth_console(0);
   MPI_Comm  comm = MPI_COMM_WORLD;
   const int dim  = 2;
+  test<dim>(pcout, comm, TimeStepType::DG, ProblemType::heat);
+  test<dim>(pcout, comm, TimeStepType::CGP, ProblemType::heat);
 
-  test<dim>(pcout, comm, TimeStepType::DG);
-  test<dim>(pcout, comm, TimeStepType::CGP);
+  test<dim>(pcout, comm, TimeStepType::DG, ProblemType::wave);
+  test<dim>(pcout, comm, TimeStepType::CGP, ProblemType::wave);
+
   dealii::deallog << std::endl;
   pcout << std::endl;
 }

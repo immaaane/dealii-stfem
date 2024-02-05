@@ -35,9 +35,20 @@ test(TimeStepType type, const unsigned int r)
 
       std::cout << "CG(" << r << ")" << std::endl;
 
-      auto const [full_matrix, full_matrix_der] = get_cg_weights<Number>(r);
-      print_formatted(full_matrix);
-      print_formatted(full_matrix_der);
+      auto const matrix = get_cg_weights<Number>(r);
+      print_formatted(matrix[0]);
+      print_formatted(matrix[1]);
+
+      auto [Alpha_, Beta_, Gamma_, Zeta_] = split_lhs_rhs(matrix);
+      auto [Alpha_lhs, Beta_lhs, rhs_uK_, rhs_uM_, rhs_vM_] =
+        get_fe_time_weights_wave(
+          TimeStepType::CGP, Alpha_, Beta_, Gamma_, Zeta_);
+
+      print_formatted(Alpha_lhs);
+      print_formatted(Beta_lhs);
+      print_formatted(rhs_uK_);
+      print_formatted(rhs_uM_);
+      print_formatted(rhs_vM_);
     }
 
   if (type == TimeStepType::DG)
@@ -50,6 +61,15 @@ test(TimeStepType type, const unsigned int r)
       print_formatted(jump_matrix);
       print_formatted(full_matrix);
       print_formatted(full_matrix_der);
+      FullMatrix<Number> nil;
+      auto [Alpha_lhs, Beta_lhs, rhs_uK_, rhs_uM_, rhs_vM_] =
+        get_fe_time_weights_wave(
+          TimeStepType::DG, full_matrix, full_matrix_der, jump_matrix, nil);
+      print_formatted(Alpha_lhs);
+      print_formatted(Beta_lhs);
+      print_formatted(rhs_uK_);
+      print_formatted(rhs_uM_);
+      print_formatted(rhs_vM_);
     }
 }
 

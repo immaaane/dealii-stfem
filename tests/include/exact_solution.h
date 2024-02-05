@@ -130,6 +130,59 @@ public:
   }
 };
 
+// Analytic solutions for linear acoustic waves
+namespace wave
+{
+  template <int dim, typename Number>
+  using ExactSolution = ExactSolution<dim, Number>;
+
+  template <int dim, typename Number>
+  class ExactSolutionV : public Function<dim, Number>
+  {
+  public:
+    ExactSolutionV(double f_ = 1.0)
+      : Function<dim, Number>()
+      , f(f_)
+    {}
+
+    double
+    value(Point<dim> const &x, unsigned int const) const override final
+    {
+      double value = 2 * PI * f * cos(2 * PI * f * this->get_time());
+      for (unsigned int i = 0; i < dim; ++i)
+        value *= sin(2 * PI * f * x[i]);
+      return value;
+    }
+
+  private:
+    double const f;
+  };
+
+  template <int dim, typename Number>
+  class RHSFunction : public Function<dim, Number>
+  {
+  public:
+    RHSFunction(double f_ = 1.0)
+      : Function<dim, Number>()
+      , f(f_)
+    {}
+
+    double
+    value(Point<dim> const &x, unsigned int const) const override final
+    {
+      double value =
+        pow(2.0, dim) * pow(PI * f, 2) * sin(2 * PI * f * this->get_time());
+      for (unsigned int i = 0; i < dim; ++i)
+        value *= sin(2 * PI * f * x[i]);
+      return value;
+    }
+
+  private:
+    double const f;
+  };
+
+} // namespace wave
+
 template <int dim, typename Number>
 class ErrorCalculator
 {
