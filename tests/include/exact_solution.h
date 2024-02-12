@@ -188,16 +188,17 @@ class ErrorCalculator
 {
 public:
   ErrorCalculator(
-    TimeStepType                            type_,
-    unsigned int                            time_degree,
-    unsigned int                            space_degree,
-    Mapping<dim> const                     &mapping_,
-    DoFHandler<dim> const                  &dof_handler_,
-    Function<dim, Number>                  &exact_solution_,
+    TimeStepType                      type_,
+    unsigned int                      time_degree,
+    unsigned int                      space_degree,
+    Mapping<dim> const               &mapping_,
+    DoFHandler<dim> const            &dof_handler_,
+    Function<dim, Number>            &exact_solution_,
     std::function<void(const double,
                        VectorType &,
                        BlockVectorType const &,
-                       VectorType const &)> evaluate_numerical_solution_)
+                       VectorType const &,
+                       unsigned int)> evaluate_numerical_solution_)
     : time_step_type(type_)
     , quad_cell(space_degree + 1)
     , quad_time(time_degree + 1)
@@ -211,7 +212,8 @@ public:
   evaluate_error(const double           time,
                  const double           time_step,
                  BlockVectorType const &x,
-                 VectorType const      &prev_x) const
+                 VectorType const      &prev_x,
+                 unsigned int           n_time_steps_at_once) const
   {
     std::unordered_map<VectorTools::NormType, double> error{
       {VectorTools::L2_norm, 0.0},
@@ -226,58 +228,64 @@ public:
     for (unsigned int i = 0; i < x.n_blocks(); ++i)
       x.block(i).update_ghost_values();
     prev_x.update_ghost_values();
-
+    auto nt_dofs =
+      static_cast<unsigned int>(x.n_blocks() / n_time_steps_at_once);
     double time_;
-    for (unsigned q = 0; q < quad_time.size(); ++q)
-      {
-        time_ = time + tq[q][0] * time_step;
-        exact_solution.set_time(time_);
-        evaluate_numerical_solution(tq[q][0], numeric, x, prev_x);
+    for (unsigned int it = 0; it < n_time_steps_at_once; ++it)
+      for (unsigned q = 0; q < quad_time.size(); ++q)
+        {
+          time_ = time + time_step * it + tq[q][0] * time_step;
+          exact_solution.set_time(time_);
+          auto const &current_prev_x =
+            it == 0 ? prev_x : x.block(nt_dofs * it - 1);
+          evaluate_numerical_solution(
+            tq[q][0], numeric, x, current_prev_x, nt_dofs * it);
 
-        numeric.update_ghost_values();
-        dealii::VectorTools::integrate_difference(mapping,
-                                                  dof_handler,
-                                                  numeric,
-                                                  exact_solution,
-                                                  differences_per_cell,
-                                                  quad_cell,
-                                                  dealii::VectorTools::L2_norm);
-        double l2 = dealii::VectorTools::compute_global_error(
-          dof_handler.get_triangulation(),
-          differences_per_cell,
-          dealii::VectorTools::L2_norm);
-        error[VectorTools::L2_norm] += time_step * tw[q] * l2 * l2;
+          numeric.update_ghost_values();
+          dealii::VectorTools::integrate_difference(
+            mapping,
+            dof_handler,
+            numeric,
+            exact_solution,
+            differences_per_cell,
+            quad_cell,
+            dealii::VectorTools::L2_norm);
+          double l2 = dealii::VectorTools::compute_global_error(
+            dof_handler.get_triangulation(),
+            differences_per_cell,
+            dealii::VectorTools::L2_norm);
+          error[VectorTools::L2_norm] += time_step * tw[q] * l2 * l2;
 
-        dealii::VectorTools::integrate_difference(
-          mapping,
-          dof_handler,
-          numeric,
-          exact_solution,
-          differences_per_cell,
-          quad_cell,
-          dealii::VectorTools::Linfty_norm);
-        double l8 = dealii::VectorTools::compute_global_error(
-          dof_handler.get_triangulation(),
-          differences_per_cell,
-          dealii::VectorTools::Linfty_norm);
-        error[VectorTools::Linfty_norm] =
-          std::max(l8, error[VectorTools::Linfty_norm]);
+          dealii::VectorTools::integrate_difference(
+            mapping,
+            dof_handler,
+            numeric,
+            exact_solution,
+            differences_per_cell,
+            quad_cell,
+            dealii::VectorTools::Linfty_norm);
+          double l8 = dealii::VectorTools::compute_global_error(
+            dof_handler.get_triangulation(),
+            differences_per_cell,
+            dealii::VectorTools::Linfty_norm);
+          error[VectorTools::Linfty_norm] =
+            std::max(l8, error[VectorTools::Linfty_norm]);
 
-        dealii::VectorTools::integrate_difference(
-          mapping,
-          dof_handler,
-          numeric,
-          exact_solution,
-          differences_per_cell,
-          quad_cell,
-          dealii::VectorTools::H1_seminorm);
-        double h1 = dealii::VectorTools::compute_global_error(
-          dof_handler.get_triangulation(),
-          differences_per_cell,
-          dealii::VectorTools::H1_seminorm);
-        error[VectorTools::H1_seminorm] += time_step * tw[q] * h1 * h1;
-        numeric.zero_out_ghost_values();
-      }
+          dealii::VectorTools::integrate_difference(
+            mapping,
+            dof_handler,
+            numeric,
+            exact_solution,
+            differences_per_cell,
+            quad_cell,
+            dealii::VectorTools::H1_seminorm);
+          double h1 = dealii::VectorTools::compute_global_error(
+            dof_handler.get_triangulation(),
+            differences_per_cell,
+            dealii::VectorTools::H1_seminorm);
+          error[VectorTools::H1_seminorm] += time_step * tw[q] * h1 * h1;
+          numeric.zero_out_ghost_values();
+        }
     for (unsigned int i = 0; i < x.n_blocks(); ++i)
       x.block(i).zero_out_ghost_values();
     prev_x.zero_out_ghost_values();
@@ -294,6 +302,7 @@ private:
   std::function<void(const double,
                      VectorType &,
                      BlockVectorType const &,
-                     VectorType const &)>
+                     VectorType const &,
+                     unsigned int)>
     evaluate_numerical_solution;
 };

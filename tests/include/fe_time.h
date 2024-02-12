@@ -34,65 +34,148 @@ namespace dealii
                            FullMatrix<Number> const &Alpha,
                            FullMatrix<Number> const &Beta,
                            FullMatrix<Number> const &Gamma,
-                           FullMatrix<Number> const &Zeta)
+                           FullMatrix<Number> const &Zeta,
+                           unsigned int              n_timesteps_at_once = 1)
   {
+    FullMatrix<Number> Alpha_inv(Alpha.m(), Alpha.n());
+    Alpha_inv.invert(Alpha);
+
+    FullMatrix<Number> BxAixB(Alpha.m(), Alpha.n());
+    // Note that the order of the arguments is not the order of the mmults:
+    // Alpha_inv, Beta, Beta corresponds to Beta*Alpha_inv*Beta
+    // Generally A,B,D -> B*A*D.
+    BxAixB.triple_product(Alpha_inv, Beta, Beta);
+
+    // u0 mass
+    FullMatrix<Number> BxAixG(Gamma.m(), Gamma.n());
+    BxAixG.triple_product(Alpha_inv, Beta, Gamma);
+    // u00
+    double gxai = Gamma(Gamma.m() - 1, 0) / Alpha(Gamma.m() - 1, Gamma.m() - 1);
+    FullMatrix<Number> GxAixG = Gamma;
+    GxAixG *= gxai;
+
+    FullMatrix<Number> Beta_row(1, Beta.n());
+    for (auto b = Beta.begin(Beta.m() - 1), br = Beta_row.begin(0);
+         b != Beta.end(Beta.m() - 1);
+         ++br, ++b)
+      *br = *b;
+
+    FullMatrix<Number> GxAixB(Gamma.m(), Beta.n());
+    Gamma.mmult(GxAixB, Beta_row);
+    GxAixB /= Alpha(Gamma.m() - 1, Gamma.m() - 1);
+
+
+
+    unsigned int nt_dofs_intvl = Alpha.m();
+    unsigned int nt_dofs_tot   = nt_dofs_intvl * n_timesteps_at_once;
+    std::array<FullMatrix<Number>, 5> ret{
+      {FullMatrix<Number>(nt_dofs_tot, nt_dofs_tot),
+       FullMatrix<Number>(nt_dofs_tot, nt_dofs_tot),
+       FullMatrix<Number>(nt_dofs_tot, 1),
+       FullMatrix<Number>(nt_dofs_tot, 1),
+       FullMatrix<Number>(nt_dofs_tot, 1)}};
     if (type == TimeStepType::CGP)
       {
-        std::array<FullMatrix<Number>, 5> ret;
-        ret[0] = Alpha;
-
-        FullMatrix<Number> Alpha_inv(Alpha.m(), Alpha.n());
-        Alpha_inv.invert(Alpha);
-
-        FullMatrix<Number> BxAixB(Alpha.m(), Alpha.n());
-        BxAixB.triple_product(Alpha_inv, Beta, Beta);
-        ret[1] = BxAixB;
-
-        // u0 stiff
-        ret[2] = Gamma;
-        // u0 mass
         FullMatrix<Number> BxAixZ(Zeta.m(), Zeta.n());
         BxAixZ.triple_product(Alpha_inv, Beta, Zeta);
-        ret[3] = BxAixZ;
 
-        // V0
-        FullMatrix<Number> BxAixG(Gamma.m(), Gamma.n());
-        BxAixG.triple_product(Alpha_inv, Beta, Gamma);
         FullMatrix<Number> ZmBxAixG = Zeta;
         ZmBxAixG.add(-1.0, BxAixG);
-        ret[4] = ZmBxAixG;
-        return ret;
+        FullMatrix<Number> ZmBxAixB(Gamma.m(), Beta.n());
+        ZmBxAixG.mmult(ZmBxAixB, Beta_row);
+        ZmBxAixB /= Alpha(Gamma.m() - 1, Gamma.m() - 1);
+        double zxai = Zeta(Zeta.m() - 1, 0) / Alpha(Zeta.m() - 1, Zeta.m() - 1);
+
+        for (unsigned int it = 0; it < n_timesteps_at_once; ++it)
+          for (unsigned int jt = 0; jt <= it; ++jt)
+            for (unsigned int i = 0; i < nt_dofs_intvl; ++i)
+              {
+                // rhs
+                if (it == 0 && jt == 0)
+                  {
+                    ret[2](i, 0) = Gamma(i, 0);
+                    ret[3](i, 0) = BxAixZ(i, 0);
+                    ret[4](i, 0) = ZmBxAixG(i, 0);
+                  }
+                else if (jt == 0)
+                  {
+                    ret[3](i + it * nt_dofs_intvl, 0) =
+                      -zxai * pow(gxai, it - 1) * ZmBxAixG(i, 0);
+                    ret[4](i + it * nt_dofs_intvl, 0) =
+                      pow(gxai, it) * ZmBxAixG(i, 0);
+                  }
+
+                if (it == jt + 1) // lower diagonal
+                  {
+                    ret[0](i + it * nt_dofs_intvl,
+                           nt_dofs_intvl - 1 + jt * nt_dofs_intvl) =
+                      -Gamma(i, 0);
+                    ret[1](i + it * nt_dofs_intvl,
+                           nt_dofs_intvl - 1 + jt * nt_dofs_intvl) =
+                      -BxAixZ(i, 0);
+                  }
+
+                if (it == jt) // Main diagonal
+                  for (unsigned int j = 0; j < nt_dofs_intvl; ++j)
+                    {
+                      ret[0](i + it * nt_dofs_intvl, j + it * nt_dofs_intvl) =
+                        Alpha(i, j);
+                      ret[1](i + it * nt_dofs_intvl, j + it * nt_dofs_intvl) =
+                        BxAixB(i, j);
+                    }
+                else // lower triangle
+                  for (unsigned int j = 0; j < nt_dofs_intvl; ++j)
+                    ret[1](i + it * nt_dofs_intvl, j + jt * nt_dofs_intvl) +=
+                      -pow(gxai, it - jt - 1) * ZmBxAixB(i, j) +
+                      (it > 1 && it - 1 > jt && j == nt_dofs_intvl - 1 ?
+                         pow(gxai, it - jt - 2) * zxai * ZmBxAixG(i, 0) :
+                         0.0);
+              }
       }
     else if (type == TimeStepType::DG)
       {
-        std::array<FullMatrix<Number>, 5> ret;
-        ret[0] = Alpha;
+        for (unsigned int it = 0; it < n_timesteps_at_once; ++it)
+          for (unsigned int i = 0; i < nt_dofs_intvl; ++i)
+            {
+              // 1st block rhs
+              if (it == 0)
+                {
+                  ret[3](i, 0) = BxAixG(i, 0);
+                  ret[4](i, 0) = Gamma(i, 0);
+                }
+              // 2nd block rhs
+              if (it == 1)
+                ret[3](nt_dofs_intvl + i, 0) = -GxAixG(i, 0);
 
-        FullMatrix<Number> Alpha_inv(Alpha.m(), Alpha.n());
-        Alpha_inv.invert(Alpha);
+              // 1st lower block diagonal
+              if (it < n_timesteps_at_once - 1)
+                for (unsigned int j = 0; j < nt_dofs_intvl; ++j)
+                  {
+                    ret[1](j + (it + 1) * nt_dofs_intvl,
+                           i + it * nt_dofs_intvl) =
+                      -GxAixB(j, i) -
+                      (i == nt_dofs_intvl - 1 ? BxAixG(j, 0) : 0.0);
+                  }
 
-        FullMatrix<Number> BxAixB(Alpha.m(), Alpha.n());
-        // Note that the order of the arguments is not the order of the mmults:
-        // Alpha_inv, Beta, Beta corresponds to Beta*Alpha_inv*Beta
-        // Generally A,B,D -> B*A*D.
-        BxAixB.triple_product(Alpha_inv, Beta, Beta);
-        ret[1] = BxAixB;
+              // 2nd lower diagonal
+              if (static_cast<int>(it) <
+                    static_cast<int>(n_timesteps_at_once) - 2 &&
+                  i == nt_dofs_intvl - 1)
+                for (unsigned int j = 0; j < nt_dofs_intvl; ++j)
+                  ret[1](j + (it + 2) * nt_dofs_intvl, i + it * nt_dofs_intvl) =
+                    GxAixG(j, 0);
 
-        // u0 stiff
-        ret[2] = FullMatrix<Number>(Gamma.m(), Gamma.n());
-        // u0 mass
-        FullMatrix<Number> BxAixG(Gamma.m(), Gamma.n());
-        BxAixG.triple_product(Alpha_inv, Beta, Gamma);
-        ret[3] = BxAixG;
-        // V0
-        ret[4] = Gamma;
-        return ret;
+              // Main diagonal
+              for (unsigned int j = 0; j < nt_dofs_intvl; ++j)
+                {
+                  ret[0](i + it * nt_dofs_intvl, j + it * nt_dofs_intvl) =
+                    Alpha(i, j);
+                  ret[1](i + it * nt_dofs_intvl, j + it * nt_dofs_intvl) =
+                    BxAixB(i, j);
+                }
+            }
       }
-    return {{FullMatrix<Number>(),
-             FullMatrix<Number>(),
-             FullMatrix<Number>(),
-             FullMatrix<Number>(),
-             FullMatrix<Number>()}};
+    return ret;
   }
 
 
@@ -120,17 +203,61 @@ namespace dealii
    */
   template <typename Number>
   std::array<FullMatrix<Number>, 4>
-  get_fe_time_weights(TimeStepType type, unsigned int const r)
+  get_fe_time_weights(TimeStepType       type,
+                      unsigned int const r,
+                      double             time_step_size,
+                      unsigned int       n_timesteps_at_once = 1)
   {
+    std::array<FullMatrix<Number>, 4> tmp;
     if (type == TimeStepType::CGP)
-      return split_lhs_rhs(get_cg_weights<Number>(r));
+      {
+        tmp = split_lhs_rhs(get_cg_weights<Number>(r));
+        tmp[2] *= time_step_size;
+      }
     else if (type == TimeStepType::DG)
-      return split_lhs_rhs(get_dg_weights<Number>(r));
+      {
+        tmp    = split_lhs_rhs(get_dg_weights<Number>(r));
+        tmp[3] = tmp[2];
+        tmp[2] = 0.0;
+      }
+    tmp[0] *= time_step_size;
 
-    return {{FullMatrix<Number>(),
-             FullMatrix<Number>(),
-             FullMatrix<Number>(),
-             FullMatrix<Number>()}};
+    unsigned int nt_dofs_intvl = tmp[0].m();
+    unsigned int nt_dofs_tot   = nt_dofs_intvl * n_timesteps_at_once;
+    std::array<FullMatrix<Number>, 4> ret{
+      {FullMatrix<Number>(nt_dofs_tot, nt_dofs_tot),
+       FullMatrix<Number>(nt_dofs_tot, nt_dofs_tot),
+       FullMatrix<Number>(nt_dofs_tot, 1),
+       FullMatrix<Number>(nt_dofs_tot, 1)}};
+
+    for (unsigned int it = 0; it < n_timesteps_at_once; ++it)
+      for (unsigned int i = 0; i < nt_dofs_intvl; ++i)
+        {
+          // First lower block diagonal
+          if (it < n_timesteps_at_once - 1 && i == nt_dofs_intvl - 1)
+            for (unsigned int j = 0; j < nt_dofs_intvl; ++j)
+              {
+                ret[0](j + (it + 1) * nt_dofs_intvl, i + it * nt_dofs_intvl) =
+                  -tmp[2](j, 0);
+                ret[1](j + (it + 1) * nt_dofs_intvl, i + it * nt_dofs_intvl) =
+                  -tmp[3](j, 0);
+              }
+
+          // Main block diagonal
+          for (unsigned int j = 0; j < nt_dofs_intvl; ++j)
+            {
+              ret[0](i + it * nt_dofs_intvl, j + it * nt_dofs_intvl) =
+                tmp[0](i, j);
+              ret[1](i + it * nt_dofs_intvl, j + it * nt_dofs_intvl) =
+                tmp[1](i, j);
+            }
+        }
+    for (unsigned int i = 0; i < nt_dofs_intvl; ++i)
+      {
+        ret[2](i, 0) = tmp[type == TimeStepType::CGP ? 2 : 3](i, 0);
+        ret[3](i, 0) = tmp[type == TimeStepType::CGP ? 3 : 2](i, 0);
+      }
+    return ret;
   }
 
   template <typename Number>

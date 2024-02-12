@@ -40,15 +40,15 @@ test(TimeStepType type, const unsigned int r)
       print_formatted(matrix[1]);
 
       auto [Alpha_, Beta_, Gamma_, Zeta_] = split_lhs_rhs(matrix);
-      auto [Alpha_lhs, Beta_lhs, rhs_uK_, rhs_uM_, rhs_vM_] =
+      auto [Alpha_lhs, Beta_lhs, rhs_uK, rhs_uM, rhs_vM] =
         get_fe_time_weights_wave(
           TimeStepType::CGP, Alpha_, Beta_, Gamma_, Zeta_);
-
+      std::cout << "Waves" << std::endl;
       print_formatted(Alpha_lhs);
       print_formatted(Beta_lhs);
-      print_formatted(rhs_uK_);
-      print_formatted(rhs_uM_);
-      print_formatted(rhs_vM_);
+      print_formatted(rhs_uK);
+      print_formatted(rhs_uM);
+      print_formatted(rhs_vM);
     }
 
   if (type == TimeStepType::DG)
@@ -62,15 +62,43 @@ test(TimeStepType type, const unsigned int r)
       print_formatted(full_matrix);
       print_formatted(full_matrix_der);
       FullMatrix<Number> nil;
-      auto [Alpha_lhs, Beta_lhs, rhs_uK_, rhs_uM_, rhs_vM_] =
+      auto [Alpha_lhs, Beta_lhs, rhs_uK, rhs_uM, rhs_vM] =
         get_fe_time_weights_wave(
           TimeStepType::DG, full_matrix, full_matrix_der, jump_matrix, nil);
+      std::cout << "Waves" << std::endl;
       print_formatted(Alpha_lhs);
       print_formatted(Beta_lhs);
-      print_formatted(rhs_uK_);
-      print_formatted(rhs_uM_);
-      print_formatted(rhs_vM_);
+      print_formatted(rhs_uK);
+      print_formatted(rhs_uM);
+      print_formatted(rhs_vM);
     }
+}
+
+
+void
+test2(TimeStepType type, const unsigned int r, unsigned int n_timesteps_at_once)
+{
+  std::cout << (type == TimeStepType::CGP ? "CG(" : "DG(") << r << ") - "
+            << n_timesteps_at_once << " timesteps in one system" << std::endl;
+  auto [Alpha, Beta, Gamma, Zeta] =
+    get_fe_time_weights<double>(type, r, 1.0, n_timesteps_at_once);
+  print_formatted(Alpha);
+  print_formatted(Beta);
+  print_formatted(Gamma);
+  print_formatted(Zeta);
+  auto [Alpha_1, Beta_1, Gamma_1, Zeta_1] =
+    get_fe_time_weights<double>(type, r, 1.0, 1);
+  auto [lhs_uK, lhs_uM, rhs_uK, rhs_uM, rhs_vM] =
+    get_fe_time_weights_wave<double>(
+      type, Alpha_1, Beta_1, Gamma_1, Zeta_1, n_timesteps_at_once);
+  std::cout << "Waves " << (type == TimeStepType::CGP ? "CG(" : "DG(") << r
+            << ") - " << n_timesteps_at_once << " timesteps in one system"
+            << std::endl;
+  print_formatted(lhs_uK);
+  print_formatted(lhs_uM);
+  print_formatted(rhs_uK);
+  print_formatted(rhs_uM);
+  print_formatted(rhs_vM);
 }
 
 int
@@ -80,4 +108,17 @@ main()
   test(TimeStepType::CGP, 2);
   test(TimeStepType::DG, 1);
   test(TimeStepType::DG, 2);
+
+  test2(TimeStepType::CGP, 1, 2);
+  test2(TimeStepType::CGP, 2, 2);
+  test2(TimeStepType::DG, 1, 2);
+  test2(TimeStepType::DG, 2, 2);
+  test2(TimeStepType::CGP, 1, 3);
+  test2(TimeStepType::CGP, 2, 3);
+  test2(TimeStepType::DG, 1, 3);
+  test2(TimeStepType::DG, 2, 3);
+  test2(TimeStepType::CGP, 1, 4);
+  test2(TimeStepType::CGP, 2, 4);
+  test2(TimeStepType::DG, 1, 4);
+  test2(TimeStepType::DG, 2, 4);
 }
