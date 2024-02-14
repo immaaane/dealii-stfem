@@ -1,265 +1,529 @@
-:: Number of active cells: 16
+:: Number of active cells: 1
 :: Number of degrees of freedom: 25
 
 :: Min Level 0  Max Level 2
-:: Number of active cells: 64
+:: Number of active cells: 25
 :: Number of degrees of freedom: 81
 
 :: Min Level 0  Max Level 3
-:: Number of active cells: 256
+:: Number of active cells: 52
 :: Number of degrees of freedom: 289
 
 :: Min Level 0  Max Level 4
-:: Number of active cells: 1024
+:: Number of active cells: 121
 :: Number of degrees of freedom: 1089
 
 :: Min Level 0  Max Level 5
 cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
-   16     25      1     200 2.54485e-01    - 1.80838e-01    - 1.35148e+00    - 
-   64     81      1    1296 1.89565e-01 0.42 7.85743e-02 1.20 6.49120e-01 1.06 
-  256    289      1    9248 9.96588e-02 0.93 3.67229e-02 1.10 3.17972e-01 1.03 
- 1024   1089      1   69696 5.00625e-02 0.99 1.78685e-02 1.04 1.57303e-01 1.02 
+    1     25      2     200 2.54485e-01    - 1.80838e-01    - 1.35148e+00    - 
+   25     81      2    1296 1.89565e-01 0.42 7.85743e-02 1.20 6.49120e-01 1.06 
+   52    289      2    9248 9.96588e-02 0.93 3.67229e-02 1.10 3.17972e-01 1.03 
+  121   1089      2   69696 5.00625e-02 0.99 1.78685e-02 1.04 1.57303e-01 1.02 
 
-:: Number of active cells: 16
+:: Number of active cells: 1
 :: Number of degrees of freedom: 81
 
 :: Min Level 0  Max Level 2
-:: Number of active cells: 64
+:: Number of active cells: 25
 :: Number of degrees of freedom: 289
 
 :: Min Level 0  Max Level 3
-:: Number of active cells: 256
+:: Number of active cells: 52
 :: Number of degrees of freedom: 1089
 
 :: Min Level 0  Max Level 4
-:: Number of active cells: 1024
+:: Number of active cells: 121
 :: Number of degrees of freedom: 4225
 
 :: Min Level 0  Max Level 5
 cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
-   16     81      2    1296 5.53197e-02    - 1.78760e-02    - 1.35366e-01    - 
-   64    289      2    9248 9.41838e-03 2.55 3.24200e-03 2.46 2.66020e-02 2.35 
-  256   1089      2   69696 1.98890e-03 2.24 6.98157e-04 2.22 6.04464e-03 2.14 
- 1024   4225      2  540800 4.72643e-04 2.07 1.66649e-04 2.07 1.47046e-03 2.04 
+    1     81      4    1296 5.53197e-02    - 1.78760e-02    - 1.35366e-01    - 
+   25    289      4    9248 9.41838e-03 2.55 3.24200e-03 2.46 2.66020e-02 2.35 
+   52   1089      4   69696 1.98890e-03 2.24 6.98157e-04 2.22 6.04464e-03 2.14 
+  121   4225      4  540800 4.72643e-04 2.07 1.66649e-04 2.07 1.47046e-03 2.04 
 
-:: Number of active cells: 16
+:: Number of active cells: 1
 :: Number of degrees of freedom: 169
 
 :: Min Level 0  Max Level 2
-:: Number of active cells: 64
+:: Number of active cells: 25
 :: Number of degrees of freedom: 625
 
 :: Min Level 0  Max Level 3
-:: Number of active cells: 256
+:: Number of active cells: 52
 :: Number of degrees of freedom: 2401
 
 :: Min Level 0  Max Level 4
-:: Number of active cells: 1024
+:: Number of active cells: 121
 :: Number of degrees of freedom: 9409
 
 :: Min Level 0  Max Level 5
 cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
-   16    169      3    4056 4.38118e-03    - 1.49412e-03    - 1.08807e-02    - 
-   64    625      3   30000 4.10628e-04 3.42 1.18503e-04 3.66 9.29332e-04 3.55 
-  256   2401      3  230496 3.93354e-05 3.38 1.14037e-05 3.38 9.63702e-05 3.27 
- 1024   9409      3 1806528 4.22074e-06 3.22 1.29396e-06 3.14 1.13290e-05 3.09 
+    1    169      6    4056 4.38118e-03    - 1.49412e-03    - 1.08807e-02    - 
+   25    625      6   30000 4.10628e-04 3.42 1.18503e-04 3.66 9.29332e-04 3.55 
+   52   2401      6  230496 3.93354e-05 3.38 1.14037e-05 3.38 9.63702e-05 3.27 
+  121   9409      6 1806528 4.22073e-06 3.22 1.29396e-06 3.14 1.13290e-05 3.09 
 
-:: Number of active cells: 16
+:: Number of active cells: 1
 :: Number of degrees of freedom: 81
 
 :: Min Level 0  Max Level 2
-:: Number of active cells: 64
+:: Number of active cells: 25
 :: Number of degrees of freedom: 289
 
 :: Min Level 0  Max Level 3
-:: Number of active cells: 256
+:: Number of active cells: 52
 :: Number of degrees of freedom: 1089
 
 :: Min Level 0  Max Level 4
-:: Number of active cells: 1024
+:: Number of active cells: 121
 :: Number of degrees of freedom: 4225
 
 :: Min Level 0  Max Level 5
 cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
-   16     81      1     648 7.26115e-02    - 2.65905e-02    - 2.05730e-01    - 
-   64    289      1    4624 1.46574e-02 2.31 5.26796e-03 2.34 4.40771e-02 2.22 
-  256   1089      1   34848 3.36710e-03 2.12 1.19272e-03 2.14 1.04069e-02 2.08 
- 1024   4225      1  270400 8.19278e-04 2.04 2.89533e-04 2.04 2.56039e-03 2.02 
+    1     81      2     648 7.26115e-02    - 2.65905e-02    - 2.05730e-01    - 
+   25    289      2    4624 1.46574e-02 2.31 5.26796e-03 2.34 4.40771e-02 2.22 
+   52   1089      2   34848 3.36710e-03 2.12 1.19272e-03 2.14 1.04069e-02 2.08 
+  121   4225      2  270400 8.19278e-04 2.04 2.89533e-04 2.04 2.56039e-03 2.02 
 
-:: Number of active cells: 16
+:: Number of active cells: 1
 :: Number of degrees of freedom: 169
 
 :: Min Level 0  Max Level 2
-:: Number of active cells: 64
+:: Number of active cells: 25
 :: Number of degrees of freedom: 625
 
 :: Min Level 0  Max Level 3
-:: Number of active cells: 256
+:: Number of active cells: 52
 :: Number of degrees of freedom: 2401
 
 :: Min Level 0  Max Level 4
-:: Number of active cells: 1024
+:: Number of active cells: 121
 :: Number of degrees of freedom: 9409
 
 :: Min Level 0  Max Level 5
 cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
-   16    169      2    2704 4.36348e-03    - 1.57444e-03    - 1.16973e-02    - 
-   64    625      2   20000 4.84735e-04 3.17 1.34200e-04 3.55 1.08432e-03 3.43 
-  256   2401      2  153664 5.32730e-05 3.19 1.39693e-05 3.26 1.20108e-04 3.17 
- 1024   9409      2 1204352 6.27021e-06 3.09 1.64493e-06 3.09 1.44840e-05 3.05 
+    1    169      4    2704 4.36348e-03    - 1.57444e-03    - 1.16973e-02    - 
+   25    625      4   20000 4.84735e-04 3.17 1.34200e-04 3.55 1.08432e-03 3.43 
+   52   2401      4  153664 5.32730e-05 3.19 1.39693e-05 3.26 1.20108e-04 3.17 
+  121   9409      4 1204352 6.27023e-06 3.09 1.64493e-06 3.09 1.44840e-05 3.05 
 
-:: Number of active cells: 16
+:: Number of active cells: 1
 :: Number of degrees of freedom: 289
 
 :: Min Level 0  Max Level 2
-:: Number of active cells: 64
+:: Number of active cells: 25
 :: Number of degrees of freedom: 1089
 
 :: Min Level 0  Max Level 3
-:: Number of active cells: 256
+:: Number of active cells: 52
 :: Number of degrees of freedom: 4225
 
 :: Min Level 0  Max Level 4
-:: Number of active cells: 1024
+:: Number of active cells: 121
 :: Number of degrees of freedom: 16641
 
 :: Min Level 0  Max Level 5
 cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
-   16    289      3    6936 3.57064e-04    - 1.09996e-04    - 7.84925e-04    - 
-   64   1089      3   52272 1.23956e-05 4.85 4.01739e-06 4.78 3.03864e-05 4.69 
-  256   4225      3  405600 6.18291e-07 4.33 1.74837e-07 4.52 1.43724e-06 4.40 
- 1024  16641      3 3195072 3.53018e-08 4.13 9.33861e-09 4.23 8.08998e-08 4.15 
+    1    289      6    6936 3.57064e-04    - 1.09996e-04    - 7.84925e-04    - 
+   25   1089      6   52272 1.23956e-05 4.85 4.01739e-06 4.78 3.03864e-05 4.69 
+   52   4225      6  405600 6.18332e-07 4.33 1.74838e-07 4.52 1.43725e-06 4.40 
+  121  16641      6 3195072 3.52772e-08 4.13 9.33830e-09 4.23 8.08982e-08 4.15 
 
-:: Number of active cells: 16
+:: Number of active cells: 1
 :: Number of degrees of freedom: 25
 
 :: Min Level 0  Max Level 2
-:: Number of active cells: 64
+:: Number of active cells: 25
 :: Number of degrees of freedom: 81
 
 :: Min Level 0  Max Level 3
-:: Number of active cells: 256
+:: Number of active cells: 52
 :: Number of degrees of freedom: 289
 
 :: Min Level 0  Max Level 4
-:: Number of active cells: 1024
+:: Number of active cells: 121
 :: Number of degrees of freedom: 1089
 
 :: Min Level 0  Max Level 5
 cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
-   16     25      1     200 2.88701e-01    - 2.09486e-01    - 1.52259e+00    - 
-   64     81      1    1296 2.56513e-01 0.17 9.82187e-02 1.09 7.59435e-01 1.00 
-  256    289      1    9248 1.63447e-01 0.65 5.15427e-02 0.93 4.30613e-01 0.82 
- 1024   1089      1   69696 9.64304e-02 0.76 2.86666e-02 0.85 2.48353e-01 0.79 
+    1     25      1     200 2.54485e-01    - 1.80838e-01    - 1.35148e+00    - 
+   25     81      1    1296 1.89565e-01 0.42 7.85743e-02 1.20 6.49120e-01 1.06 
+   52    289      1    9248 9.96588e-02 0.93 3.67229e-02 1.10 3.17972e-01 1.03 
+  121   1089      1   69696 5.00625e-02 0.99 1.78685e-02 1.04 1.57303e-01 1.02 
 
-:: Number of active cells: 16
+:: Number of active cells: 1
 :: Number of degrees of freedom: 81
 
 :: Min Level 0  Max Level 2
-:: Number of active cells: 64
+:: Number of active cells: 25
 :: Number of degrees of freedom: 289
 
 :: Min Level 0  Max Level 3
-:: Number of active cells: 256
+:: Number of active cells: 52
 :: Number of degrees of freedom: 1089
 
 :: Min Level 0  Max Level 4
-:: Number of active cells: 1024
+:: Number of active cells: 121
 :: Number of degrees of freedom: 4225
 
 :: Min Level 0  Max Level 5
 cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
-   16     81      2    1296 7.45999e-02    - 2.07852e-02    - 1.55075e-01    - 
-   64    289      2    9248 1.21730e-02 2.62 3.43762e-03 2.60 2.80797e-02 2.47 
-  256   1089      2   69696 2.34413e-03 2.38 7.09498e-04 2.28 6.13538e-03 2.19 
- 1024   4225      2  540800 5.15686e-04 2.18 1.67299e-04 2.08 1.47590e-03 2.06 
+    1     81      2    1296 5.53197e-02    - 1.78760e-02    - 1.35366e-01    - 
+   25    289      2    9248 9.41838e-03 2.55 3.24200e-03 2.46 2.66020e-02 2.35 
+   52   1089      2   69696 1.98890e-03 2.24 6.98157e-04 2.22 6.04464e-03 2.14 
+  121   4225      2  540800 4.72643e-04 2.07 1.66649e-04 2.07 1.47046e-03 2.04 
 
-:: Number of active cells: 16
+:: Number of active cells: 1
 :: Number of degrees of freedom: 169
 
 :: Min Level 0  Max Level 2
-:: Number of active cells: 64
+:: Number of active cells: 25
 :: Number of degrees of freedom: 625
 
 :: Min Level 0  Max Level 3
-:: Number of active cells: 256
+:: Number of active cells: 52
 :: Number of degrees of freedom: 2401
 
 :: Min Level 0  Max Level 4
-:: Number of active cells: 1024
+:: Number of active cells: 121
 :: Number of degrees of freedom: 9409
 
 :: Min Level 0  Max Level 5
 cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
-   16    169      3    4056 4.52847e-03    - 1.52496e-03    - 1.10392e-02    - 
-   64    625      3   30000 4.16666e-04 3.44 1.18913e-04 3.68 9.31074e-04 3.57 
-  256   2401      3  230496 3.94389e-05 3.40 1.14093e-05 3.38 9.63989e-05 3.27 
- 1024   9409      3 1806528 4.22193e-06 3.22 1.29408e-06 3.14 1.13299e-05 3.09 
+    1    169      3    4056 4.38118e-03    - 1.49412e-03    - 1.08807e-02    - 
+   25    625      3   30000 4.10628e-04 3.42 1.18503e-04 3.66 9.29332e-04 3.55 
+   52   2401      3  230496 3.93354e-05 3.38 1.14037e-05 3.38 9.63702e-05 3.27 
+  121   9409      3 1806528 4.22075e-06 3.22 1.29396e-06 3.14 1.13290e-05 3.09 
 
-:: Number of active cells: 16
+:: Number of active cells: 1
 :: Number of degrees of freedom: 81
 
 :: Min Level 0  Max Level 2
-:: Number of active cells: 64
+:: Number of active cells: 25
 :: Number of degrees of freedom: 289
 
 :: Min Level 0  Max Level 3
-:: Number of active cells: 256
+:: Number of active cells: 52
 :: Number of degrees of freedom: 1089
 
 :: Min Level 0  Max Level 4
-:: Number of active cells: 1024
+:: Number of active cells: 121
 :: Number of degrees of freedom: 4225
 
 :: Min Level 0  Max Level 5
 cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
-   16     81      1     648 1.05092e-01    - 3.95741e-02    - 3.44071e-01    - 
-   64    289      1    4624 3.41466e-02 1.62 1.01367e-02 1.96 8.97898e-02 1.94 
-  256   1089      1   34848 8.94339e-03 1.93 2.54464e-03 1.99 2.25969e-02 1.99 
- 1024   4225      1  270400 2.28143e-03 1.97 6.36703e-04 2.00 5.65676e-03 2.00 
+    1     81      1     648 7.26115e-02    - 2.65905e-02    - 2.05730e-01    - 
+   25    289      1    4624 1.46574e-02 2.31 5.26796e-03 2.34 4.40771e-02 2.22 
+   52   1089      1   34848 3.36710e-03 2.12 1.19272e-03 2.14 1.04069e-02 2.08 
+  121   4225      1  270400 8.19278e-04 2.04 2.89533e-04 2.04 2.56039e-03 2.02 
 
-:: Number of active cells: 16
+:: Number of active cells: 1
 :: Number of degrees of freedom: 169
 
 :: Min Level 0  Max Level 2
-:: Number of active cells: 64
+:: Number of active cells: 25
 :: Number of degrees of freedom: 625
 
 :: Min Level 0  Max Level 3
-:: Number of active cells: 256
+:: Number of active cells: 52
 :: Number of degrees of freedom: 2401
 
 :: Min Level 0  Max Level 4
-:: Number of active cells: 1024
+:: Number of active cells: 121
 :: Number of degrees of freedom: 9409
 
 :: Min Level 0  Max Level 5
 cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
-   16    169      2    2704 6.40688e-03    - 1.66044e-03    - 1.25388e-02    - 
-   64    625      2   20000 5.95103e-04 3.43 1.39009e-04 3.58 1.13026e-03 3.47 
-  256   2401      2  153664 5.87637e-05 3.34 1.41595e-05 3.30 1.21845e-04 3.21 
- 1024   9409      2 1204352 6.57872e-06 3.16 1.65133e-06 3.10 1.45413e-05 3.07 
+    1    169      2    2704 4.36348e-03    - 1.57444e-03    - 1.16973e-02    - 
+   25    625      2   20000 4.84735e-04 3.17 1.34200e-04 3.55 1.08432e-03 3.43 
+   52   2401      2  153664 5.32730e-05 3.19 1.39693e-05 3.26 1.20108e-04 3.17 
+  121   9409      2 1204352 6.27023e-06 3.09 1.64493e-06 3.09 1.44840e-05 3.05 
 
-:: Number of active cells: 16
+:: Number of active cells: 1
 :: Number of degrees of freedom: 289
 
 :: Min Level 0  Max Level 2
-:: Number of active cells: 64
+:: Number of active cells: 25
 :: Number of degrees of freedom: 1089
 
 :: Min Level 0  Max Level 3
-:: Number of active cells: 256
+:: Number of active cells: 52
 :: Number of degrees of freedom: 4225
 
 :: Min Level 0  Max Level 4
-:: Number of active cells: 1024
+:: Number of active cells: 121
 :: Number of degrees of freedom: 16641
 
 :: Min Level 0  Max Level 5
 cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
-   16    289      3    6936 3.62739e-04    - 1.11000e-04    - 7.90334e-04    - 
-   64   1089      3   52272 1.25185e-05 4.86 4.02560e-06 4.79 3.04328e-05 4.70 
-  256   4225      3  405600 6.20122e-07 4.34 1.74946e-07 4.52 1.43808e-06 4.40 
- 1024  16641      3 3195072 3.53322e-08 4.13 9.34046e-09 4.23 8.09158e-08 4.15 
+    1    289      3    6936 3.57064e-04    - 1.09996e-04    - 7.84925e-04    - 
+   25   1089      3   52272 1.23956e-05 4.85 4.01739e-06 4.78 3.03864e-05 4.69 
+   52   4225      3  405600 6.18298e-07 4.33 1.74837e-07 4.52 1.43724e-06 4.40 
+  121  16641      3 3195072 3.53917e-08 4.13 9.33871e-09 4.23 8.09013e-08 4.15 
+
+:: Number of active cells: 1
+:: Number of degrees of freedom: 25
+
+:: Min Level 0  Max Level 2
+:: Number of active cells: 25
+:: Number of degrees of freedom: 81
+
+:: Min Level 0  Max Level 3
+:: Number of active cells: 52
+:: Number of degrees of freedom: 289
+
+:: Min Level 0  Max Level 4
+:: Number of active cells: 121
+:: Number of degrees of freedom: 1089
+
+:: Min Level 0  Max Level 5
+cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
+    1     25      4     200 2.88701e-01    - 2.09486e-01    - 1.52259e+00    - 
+   25     81      4    1296 2.56513e-01 0.17 9.82187e-02 1.09 7.59435e-01 1.00 
+   52    289      4    9248 1.63447e-01 0.65 5.15427e-02 0.93 4.30613e-01 0.82 
+  121   1089      4   69696 9.64304e-02 0.76 2.86666e-02 0.85 2.48353e-01 0.79 
+
+:: Number of active cells: 1
+:: Number of degrees of freedom: 81
+
+:: Min Level 0  Max Level 2
+:: Number of active cells: 25
+:: Number of degrees of freedom: 289
+
+:: Min Level 0  Max Level 3
+:: Number of active cells: 52
+:: Number of degrees of freedom: 1089
+
+:: Min Level 0  Max Level 4
+:: Number of active cells: 121
+:: Number of degrees of freedom: 4225
+
+:: Min Level 0  Max Level 5
+cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
+    1     81      8    1296 7.45999e-02    - 2.07852e-02    - 1.55075e-01    - 
+   25    289      8    9248 1.21730e-02 2.62 3.43762e-03 2.60 2.80797e-02 2.47 
+   52   1089      8   69696 2.34413e-03 2.38 7.09498e-04 2.28 6.13538e-03 2.19 
+  121   4225      8  540800 5.15686e-04 2.18 1.67299e-04 2.08 1.47590e-03 2.06 
+
+:: Number of active cells: 1
+:: Number of degrees of freedom: 169
+
+:: Min Level 0  Max Level 2
+:: Number of active cells: 25
+:: Number of degrees of freedom: 625
+
+:: Min Level 0  Max Level 3
+:: Number of active cells: 52
+:: Number of degrees of freedom: 2401
+
+:: Min Level 0  Max Level 4
+:: Number of active cells: 121
+:: Number of degrees of freedom: 9409
+
+:: Min Level 0  Max Level 5
+cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
+    1    169     12    4056 4.52847e-03    - 1.52496e-03    - 1.10392e-02    - 
+   25    625     12   30000 4.16666e-04 3.44 1.18913e-04 3.68 9.31074e-04 3.57 
+   52   2401     12  230496 3.94389e-05 3.40 1.14093e-05 3.38 9.63989e-05 3.27 
+  121   9409     12 1806528 4.22193e-06 3.22 1.29408e-06 3.14 1.13299e-05 3.09 
+
+:: Number of active cells: 1
+:: Number of degrees of freedom: 81
+
+:: Min Level 0  Max Level 2
+:: Number of active cells: 25
+:: Number of degrees of freedom: 289
+
+:: Min Level 0  Max Level 3
+:: Number of active cells: 52
+:: Number of degrees of freedom: 1089
+
+:: Min Level 0  Max Level 4
+:: Number of active cells: 121
+:: Number of degrees of freedom: 4225
+
+:: Min Level 0  Max Level 5
+cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
+    1     81      4     648 1.05092e-01    - 3.95741e-02    - 3.44071e-01    - 
+   25    289      4    4624 3.41466e-02 1.62 1.01367e-02 1.96 8.97898e-02 1.94 
+   52   1089      4   34848 8.94339e-03 1.93 2.54464e-03 1.99 2.25969e-02 1.99 
+  121   4225      4  270400 2.28143e-03 1.97 6.36703e-04 2.00 5.65676e-03 2.00 
+
+:: Number of active cells: 1
+:: Number of degrees of freedom: 169
+
+:: Min Level 0  Max Level 2
+:: Number of active cells: 25
+:: Number of degrees of freedom: 625
+
+:: Min Level 0  Max Level 3
+:: Number of active cells: 52
+:: Number of degrees of freedom: 2401
+
+:: Min Level 0  Max Level 4
+:: Number of active cells: 121
+:: Number of degrees of freedom: 9409
+
+:: Min Level 0  Max Level 5
+cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
+    1    169      8    2704 6.40688e-03    - 1.66044e-03    - 1.25388e-02    - 
+   25    625      8   20000 5.95103e-04 3.43 1.39009e-04 3.58 1.13026e-03 3.47 
+   52   2401      8  153664 5.87637e-05 3.34 1.41595e-05 3.30 1.21845e-04 3.21 
+  121   9409      8 1204352 6.57872e-06 3.16 1.65133e-06 3.10 1.45413e-05 3.07 
+
+:: Number of active cells: 1
+:: Number of degrees of freedom: 289
+
+:: Min Level 0  Max Level 2
+:: Number of active cells: 25
+:: Number of degrees of freedom: 1089
+
+:: Min Level 0  Max Level 3
+:: Number of active cells: 52
+:: Number of degrees of freedom: 4225
+
+:: Min Level 0  Max Level 4
+:: Number of active cells: 121
+:: Number of degrees of freedom: 16641
+
+:: Min Level 0  Max Level 5
+cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
+    1    289     12    6936 3.62739e-04    - 1.11000e-04    - 7.90334e-04    - 
+   25   1089     12   52272 1.25185e-05 4.86 4.02560e-06 4.79 3.04328e-05 4.70 
+   52   4225     12  405600 6.20124e-07 4.34 1.74946e-07 4.52 1.43808e-06 4.40 
+  121  16641     12 3195072 3.53305e-08 4.13 9.34045e-09 4.23 8.09161e-08 4.15 
+
+:: Number of active cells: 1
+:: Number of degrees of freedom: 25
+
+:: Min Level 0  Max Level 2
+:: Number of active cells: 25
+:: Number of degrees of freedom: 81
+
+:: Min Level 0  Max Level 3
+:: Number of active cells: 52
+:: Number of degrees of freedom: 289
+
+:: Min Level 0  Max Level 4
+:: Number of active cells: 121
+:: Number of degrees of freedom: 1089
+
+:: Min Level 0  Max Level 5
+cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
+    1     25      1     200 2.88701e-01    - 2.09486e-01    - 1.52259e+00    - 
+   25     81      1    1296 2.56513e-01 0.17 9.82187e-02 1.09 7.59435e-01 1.00 
+   52    289      1    9248 1.63447e-01 0.65 5.15427e-02 0.93 4.30613e-01 0.82 
+  121   1089      1   69696 9.64304e-02 0.76 2.86666e-02 0.85 2.48353e-01 0.79 
+
+:: Number of active cells: 1
+:: Number of degrees of freedom: 81
+
+:: Min Level 0  Max Level 2
+:: Number of active cells: 25
+:: Number of degrees of freedom: 289
+
+:: Min Level 0  Max Level 3
+:: Number of active cells: 52
+:: Number of degrees of freedom: 1089
+
+:: Min Level 0  Max Level 4
+:: Number of active cells: 121
+:: Number of degrees of freedom: 4225
+
+:: Min Level 0  Max Level 5
+cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
+    1     81      2    1296 7.45999e-02    - 2.07852e-02    - 1.55075e-01    - 
+   25    289      2    9248 1.21730e-02 2.62 3.43762e-03 2.60 2.80797e-02 2.47 
+   52   1089      2   69696 2.34413e-03 2.38 7.09498e-04 2.28 6.13538e-03 2.19 
+  121   4225      2  540800 5.15686e-04 2.18 1.67299e-04 2.08 1.47590e-03 2.06 
+
+:: Number of active cells: 1
+:: Number of degrees of freedom: 169
+
+:: Min Level 0  Max Level 2
+:: Number of active cells: 25
+:: Number of degrees of freedom: 625
+
+:: Min Level 0  Max Level 3
+:: Number of active cells: 52
+:: Number of degrees of freedom: 2401
+
+:: Min Level 0  Max Level 4
+:: Number of active cells: 121
+:: Number of degrees of freedom: 9409
+
+:: Min Level 0  Max Level 5
+cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
+    1    169      3    4056 4.52847e-03    - 1.52496e-03    - 1.10392e-02    - 
+   25    625      3   30000 4.16666e-04 3.44 1.18913e-04 3.68 9.31074e-04 3.57 
+   52   2401      3  230496 3.94389e-05 3.40 1.14093e-05 3.38 9.63989e-05 3.27 
+  121   9409      3 1806528 4.22193e-06 3.22 1.29408e-06 3.14 1.13299e-05 3.09 
+
+:: Number of active cells: 1
+:: Number of degrees of freedom: 81
+
+:: Min Level 0  Max Level 2
+:: Number of active cells: 25
+:: Number of degrees of freedom: 289
+
+:: Min Level 0  Max Level 3
+:: Number of active cells: 52
+:: Number of degrees of freedom: 1089
+
+:: Min Level 0  Max Level 4
+:: Number of active cells: 121
+:: Number of degrees of freedom: 4225
+
+:: Min Level 0  Max Level 5
+cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
+    1     81      1     648 1.05092e-01    - 3.95741e-02    - 3.44071e-01    - 
+   25    289      1    4624 3.41466e-02 1.62 1.01367e-02 1.96 8.97898e-02 1.94 
+   52   1089      1   34848 8.94339e-03 1.93 2.54464e-03 1.99 2.25969e-02 1.99 
+  121   4225      1  270400 2.28143e-03 1.97 6.36703e-04 2.00 5.65676e-03 2.00 
+
+:: Number of active cells: 1
+:: Number of degrees of freedom: 169
+
+:: Min Level 0  Max Level 2
+:: Number of active cells: 25
+:: Number of degrees of freedom: 625
+
+:: Min Level 0  Max Level 3
+:: Number of active cells: 52
+:: Number of degrees of freedom: 2401
+
+:: Min Level 0  Max Level 4
+:: Number of active cells: 121
+:: Number of degrees of freedom: 9409
+
+:: Min Level 0  Max Level 5
+cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
+    1    169      2    2704 6.40688e-03    - 1.66044e-03    - 1.25388e-02    - 
+   25    625      2   20000 5.95103e-04 3.43 1.39009e-04 3.58 1.13026e-03 3.47 
+   52   2401      2  153664 5.87637e-05 3.34 1.41595e-05 3.30 1.21845e-04 3.21 
+  121   9409      2 1204352 6.57873e-06 3.16 1.65133e-06 3.10 1.45413e-05 3.07 
+
+:: Number of active cells: 1
+:: Number of degrees of freedom: 289
+
+:: Min Level 0  Max Level 2
+:: Number of active cells: 25
+:: Number of degrees of freedom: 1089
+
+:: Min Level 0  Max Level 3
+:: Number of active cells: 52
+:: Number of degrees of freedom: 4225
+
+:: Min Level 0  Max Level 4
+:: Number of active cells: 121
+:: Number of degrees of freedom: 16641
+
+:: Min Level 0  Max Level 5
+cells s-dofs t-dofs st-dofs    L∞-L∞          L2-L2          L2-H1_semi    
+    1    289      3    6936 3.62739e-04    - 1.11000e-04    - 7.90334e-04    - 
+   25   1089      3   52272 1.25185e-05 4.86 4.02560e-06 4.79 3.04328e-05 4.70 
+   52   4225      3  405600 6.20121e-07 4.34 1.74946e-07 4.52 1.43808e-06 4.40 
+  121  16641      3 3195072 3.53395e-08 4.13 9.34046e-09 4.23 8.09160e-08 4.15 
 
 
