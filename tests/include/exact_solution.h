@@ -4,7 +4,10 @@
 
 #include <deal.II/dofs/dof_handler.h>
 
+#include <deal.II/numerics/vector_tools.h>
+
 #include "fe_time.h"
+#include "types.h"
 
 using namespace dealii;
 using dealii::numbers::PI;
