@@ -106,8 +106,14 @@ main()
 {
   test(TimeStepType::CGP, 1);
   test(TimeStepType::CGP, 2);
+  test(TimeStepType::CGP, 3);
+  test(TimeStepType::CGP, 4);
+  test(TimeStepType::CGP, 5);
   test(TimeStepType::DG, 1);
   test(TimeStepType::DG, 2);
+  test(TimeStepType::DG, 3);
+  test(TimeStepType::DG, 4);
+  test(TimeStepType::DG, 5);
 
   test2(TimeStepType::CGP, 1, 2);
   test2(TimeStepType::CGP, 2, 2);
