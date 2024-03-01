@@ -12,10 +12,6 @@
 using namespace dealii;
 using dealii::numbers::PI;
 
-using Number          = double;
-using VectorType      = LinearAlgebra::distributed::Vector<double>;
-using BlockVectorType = LinearAlgebra::distributed::BlockVector<double>;
-
 template <int dim, typename Number>
 class ExactSolution : public Function<dim, Number>
 {
@@ -190,6 +186,9 @@ template <int dim, typename Number>
 class ErrorCalculator
 {
 public:
+  using VectorType      = VectorT<Number>;
+  using BlockVectorType = BlockVectorT<Number>;
+
   ErrorCalculator(
     TimeStepType                      type_,
     unsigned int                      time_degree,

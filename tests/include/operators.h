@@ -1,15 +1,20 @@
 #pragma once
 
+#include <deal.II/base/subscriptor.h>
+
 #include <deal.II/matrix_free/fe_evaluation.h>
 #include <deal.II/matrix_free/matrix_free.h>
 #include <deal.II/matrix_free/tools.h>
 
+#include "types.h"
+
 namespace dealii
 {
+  template <typename Number>
   void
-  tensorproduct_add(BlockVectorType          &c,
+  tensorproduct_add(BlockVectorT<Number>     &c,
                     FullMatrix<Number> const &A,
-                    VectorType const         &b,
+                    VectorT<Number> const    &b,
                     int                       block_offset = 0)
   {
     const unsigned int n_blocks = A.m();
@@ -18,11 +23,12 @@ namespace dealii
         c.block(block_offset + i).add(A(i, 0), b);
   }
 
-  BlockVectorType
-  operator*(const FullMatrix<Number> &A, VectorType const &b)
+  template <typename Number>
+  BlockVectorT<Number>
+  operator*(const FullMatrix<Number> &A, VectorT<Number> const &b)
   {
-    const unsigned int n_blocks = A.m();
-    BlockVectorType    c(n_blocks);
+    const unsigned int   n_blocks = A.m();
+    BlockVectorT<Number> c(n_blocks);
     for (unsigned int i = 0; i < n_blocks; ++i)
       c.block(i) = b;
     c = 0.0;
@@ -30,12 +36,12 @@ namespace dealii
     return c;
   }
 
-
+  template <typename Number>
   void
-  tensorproduct_add(BlockVectorType          &c,
-                    FullMatrix<Number> const &A,
-                    BlockVectorType const    &b,
-                    int                       block_offset = 0)
+  tensorproduct_add(BlockVectorT<Number>       &c,
+                    FullMatrix<Number> const   &A,
+                    BlockVectorT<Number> const &b,
+                    int                         block_offset = 0)
   {
     const unsigned int n_blocks = A.m();
     for (unsigned int i = 0; i < n_blocks; ++i)
@@ -44,19 +50,23 @@ namespace dealii
           c.block(block_offset + i).add(A(i, j), b.block(block_offset + j));
   }
 
-  BlockVectorType
-  operator*(const FullMatrix<Number> &A, BlockVectorType const &b)
+  template <typename Number>
+  BlockVectorT<Number>
+  operator*(const FullMatrix<Number> &A, BlockVectorT<Number> const &b)
   {
-    BlockVectorType c = b;
-    c                 = 0.0;
+    BlockVectorT<Number> c = b;
+    c                      = 0.0;
     tensorproduct_add(c, A, b);
     return c;
   }
 
   template <typename Number, typename SystemMatrixType>
-  class SystemMatrix
+  class SystemMatrix : public Subscriptor
   {
   public:
+    using BlockVectorType = BlockVectorT<Number>;
+    using VectorType      = VectorT<Number>;
+
     SystemMatrix(TimerOutput              &timer,
                  const SystemMatrixType   &K,
                  const SystemMatrixType   &M,
@@ -165,14 +175,57 @@ namespace dealii
       vmult_add(dst, src);
     }
 
+    std::shared_ptr<DiagonalMatrix<BlockVectorType>>
+    get_matrix_diagonal() const
+    {
+      BlockVectorType vec(Alpha.m());
+      for (unsigned int i = 0; i < Alpha.m(); ++i)
+        {
+          vec.block(i) = K.get_matrix_diagonal()->get_vector();
+          vec.block(i).sadd(Alpha(i, i),
+                            Beta(i, i),
+                            M.get_matrix_diagonal()->get_vector());
+        }
+      return std::make_shared<DiagonalMatrix<BlockVectorType>>(vec);
+    }
+
+    std::shared_ptr<DiagonalMatrix<BlockVectorType>>
+    get_matrix_diagonal_inverse() const
+    {
+      BlockVectorType vec(Alpha.m());
+      for (unsigned int i = 0; i < Alpha.m(); ++i)
+        {
+          vec.block(i) = K.get_matrix_diagonal_inverse()->get_vector();
+          vec.block(i).sadd(1. / Alpha(i, i),
+                            1. / Beta(i, i),
+                            M.get_matrix_diagonal_inverse()->get_vector());
+        }
+      return std::make_shared<DiagonalMatrix<BlockVectorType>>(vec);
+    }
+
+    types::global_dof_index
+    m() const
+    {
+      return Alpha.m() * M.m();
+    }
+
+    Number
+    el(unsigned int, unsigned int) const
+    {
+      Assert(false, ExcNotImplemented());
+      return 0.0;
+    }
+
+    template <typename Number2>
     void
-    initialize_dof_vector(VectorType &vec) const
+    initialize_dof_vector(VectorT<Number2> &vec) const
     {
       K.initialize_dof_vector(vec);
     }
 
+    template <typename Number2>
     void
-    initialize_dof_vector(BlockVectorType &vec) const
+    initialize_dof_vector(BlockVectorT<Number2> &vec) const
     {
       vec.reinit(Alpha.m());
       for (unsigned int i = 0; i < vec.n_blocks(); ++i)
@@ -195,6 +248,9 @@ namespace dealii
   class MatrixFreeOperator
   {
   public:
+    using BlockVectorType = BlockVectorT<Number>;
+    using VectorType      = VectorT<Number>;
+
     MatrixFreeOperator(const Mapping<dim>              &mapping,
                        const DoFHandler<dim>           &dof_handler,
                        const AffineConstraints<Number> &constraints,
@@ -209,10 +265,13 @@ namespace dealii
 
       matrix_free.reinit(
         mapping, dof_handler, constraints, quadrature, additional_data);
+
+      compute_diagonal();
     }
 
+    template <typename Number2>
     void
-    initialize_dof_vector(VectorType &vec) const
+    initialize_dof_vector(VectorT<Number2> &vec) const
     {
       matrix_free.initialize_dof_vector(vec);
     }
@@ -235,8 +294,53 @@ namespace dealii
         this);
     }
 
+    std::shared_ptr<DiagonalMatrix<VectorType>> const &
+    get_matrix_diagonal() const
+    {
+      return diagonal;
+    }
+
+    std::shared_ptr<DiagonalMatrix<VectorType>> const &
+    get_matrix_diagonal_inverse() const
+    {
+      return diagonal_inverse;
+    }
+
+    types::global_dof_index
+    m() const
+    {
+      return matrix_free.get_dof_handler().n_dofs();
+    }
+
+    Number
+    el(unsigned int, unsigned int) const
+    {
+      Assert(false, ExcNotImplemented());
+      return 0.0;
+    }
+
   private:
     using FECellIntegrator = FEEvaluation<dim, -1, 0, 1, Number>;
+
+    void
+    compute_diagonal()
+    {
+      diagonal         = std::make_shared<DiagonalMatrix<VectorType>>();
+      diagonal_inverse = std::make_shared<DiagonalMatrix<VectorType>>();
+      VectorType &diagonal_inv_vector = diagonal_inverse->get_vector();
+      VectorType &diagonal_vector     = diagonal->get_vector();
+      initialize_dof_vector(diagonal_inv_vector);
+      initialize_dof_vector(diagonal_vector);
+      MatrixFreeTools::compute_diagonal(
+        matrix_free,
+        diagonal_vector,
+        &MatrixFreeOperator::do_cell_integral_local,
+        this);
+      diagonal_inv_vector = diagonal_vector;
+      auto constexpr tol  = std::sqrt(std::numeric_limits<Number>::epsilon());
+      for (auto &i : diagonal_inv_vector)
+        i = std::abs(i) > tol ? 1. / i : 1.;
+    }
 
     void
     do_cell_integral_range(
@@ -295,6 +399,9 @@ namespace dealii
       else if (laplace_matrix_scaling != 0.0)
         integrator.integrate(EvaluationFlags::gradients);
     }
+
+    std::shared_ptr<DiagonalMatrix<VectorType>> diagonal;
+    std::shared_ptr<DiagonalMatrix<VectorType>> diagonal_inverse;
 
     MatrixFree<dim, Number> matrix_free;
 

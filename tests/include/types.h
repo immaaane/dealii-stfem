@@ -4,8 +4,10 @@
 #include <deal.II/lac/trilinos_sparse_matrix.h>
 #include <deal.II/lac/trilinos_sparsity_pattern.h>
 
-using Number          = double;
-using VectorType      = dealii::LinearAlgebra::distributed::Vector<double>;
-using BlockVectorType = dealii::LinearAlgebra::distributed::BlockVector<double>;
+using Number = double;
+template <typename Number>
+using VectorT = dealii::LinearAlgebra::distributed::Vector<Number>;
+template <typename Number>
+using BlockVectorT = dealii::LinearAlgebra::distributed::BlockVector<Number>;
 using SparseMatrixType    = dealii::TrilinosWrappers::SparseMatrix;
 using SparsityPatternType = dealii::TrilinosWrappers::SparsityPattern;
