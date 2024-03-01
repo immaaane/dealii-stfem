@@ -3,6 +3,8 @@
 #include <deal.II/dofs/dof_handler.h>
 #include <deal.II/dofs/dof_tools.h>
 
+#include <deal.II/lac/solver_control.h>
+#include <deal.II/lac/solver_gmres.h>
 #include <deal.II/lac/sparse_matrix_tools.h>
 
 #include <deal.II/multigrid/mg_coarse.h>
@@ -248,15 +250,36 @@ namespace dealii
 
       if (additional_data.coarse_grid_smoother_type != "Smoother")
         {
-          // setup coarse-grid solver
-          const auto coarse_comm =
-            mg_dof_handlers[min_level]->get_communicator();
-          if (coarse_comm != MPI_COMM_NULL)
-            {
-            }
-          else
-            {
-            }
+          solver_control_coarse =
+            std::make_unique<ReductionControl>(10, 1.e-12, 1.e-4, false, false);
+          typename SolverGMRES<BlockVectorType>::AdditionalData const
+            gmres_additional_data(10);
+          gmres_coarse = std::make_unique<SolverGMRES<BlockVectorType>>(
+            *solver_control_coarse, gmres_additional_data);
+
+          auto diagonal_matrix =
+            mg_operators[min_level]->get_matrix_diagonal_inverse();
+
+          typename PreconditionRelaxation<
+            LevelMatrixType,
+            DiagonalMatrix<BlockVectorType>>::AdditionalData coarse_precon_data;
+          coarse_precon_data.relaxation     = 0.9;
+          coarse_precon_data.n_iterations   = 1;
+          coarse_precon_data.preconditioner = diagonal_matrix;
+
+          preconditioner_coarse = std::make_unique<
+            PreconditionRelaxation<LevelMatrixType,
+                                   DiagonalMatrix<BlockVectorType>>>();
+          preconditioner_coarse->initialize(*(mg_operators[min_level]),
+                                            coarse_precon_data);
+
+          mg_coarse = std::make_unique<dealii::MGCoarseGridIterativeSolver<
+            BlockVectorType,
+            SolverGMRES<BlockVectorType>,
+            LevelMatrixType,
+            PreconditionRelaxation<LevelMatrixType,
+                                   DiagonalMatrix<BlockVectorType>>>>(
+            *gmres_coarse, *mg_operators[min_level], *preconditioner_coarse);
         }
       else
         {
@@ -385,7 +408,14 @@ namespace dealii
     mutable std::unique_ptr<MGSmootherType> mg_smoother;
 
     mutable std::unique_ptr<MGCoarseGridBase<BlockVectorType>> mg_coarse;
-    mutable std::unique_ptr<Multigrid<BlockVectorType>>        mg;
+    mutable std::unique_ptr<SolverControl>                solver_control_coarse;
+    mutable std::unique_ptr<SolverGMRES<BlockVectorType>> gmres_coarse;
+    mutable std::unique_ptr<
+      PreconditionRelaxation<LevelMatrixType, DiagonalMatrix<BlockVectorType>>>
+      preconditioner_coarse;
+
+    mutable std::unique_ptr<Multigrid<BlockVectorType>> mg;
+
     mutable std::unique_ptr<
       PreconditionMG<dim, BlockVectorType, MGTransferType>>
       preconditioner;

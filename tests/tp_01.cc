@@ -550,7 +550,7 @@ main(int argc, char **argv)
   dealii::deallog.depth_console(0);
   MPI_Comm  comm = MPI_COMM_WORLD;
   const int dim  = 2;
-// #define PRECONDITIONER_FLOAT;
+// #define PRECONDITIONER_FLOAT
 #ifdef PRECONDITIONER_FLOAT
 #  define test test<dim, double, float>
 #else
