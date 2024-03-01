@@ -155,11 +155,11 @@ namespace dealii
 
   struct PreconditionerGMGAdditionalData
   {
-    double       smoothing_range               = 20;
+    double       smoothing_range               = 1;
     unsigned int smoothing_degree              = 5;
     unsigned int smoothing_eig_cg_n_iterations = 20;
 
-    bool estimate_relaxation = false;
+    bool estimate_relaxation = true;
 
     unsigned int coarse_grid_smoother_sweeps = 1;
     unsigned int coarse_grid_n_cycles        = 1;
