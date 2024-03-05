@@ -8,6 +8,8 @@
 
 #include <deal.II/grid/grid_generator.h>
 
+#include <deal.II/lac/precondition.h>
+
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/matrix_creator.h>
 
@@ -26,7 +28,16 @@ enum class ProblemType : unsigned int
   wave = 2,
 };
 
-template <int dim>
+template <typename Number_dst, typename Number_src>
+FullMatrix<Number_dst>
+convert_to(FullMatrix<Number_src> const &in)
+{
+  FullMatrix<Number_dst> out(in.m(), in.n());
+  out.copy_from(in);
+  return out;
+}
+
+template <int dim, typename Number, typename NumberPreconditioner = Number>
 void
 test(dealii::ConditionalOStream &pcout,
      MPI_Comm const              comm_global,
@@ -43,6 +54,8 @@ test(dealii::ConditionalOStream &pcout,
                               unsigned int const fe_degree,
                               bool               do_output,
                               unsigned int       n_timesteps_at_once) {
+    using VectorType      = VectorT<Number>;
+    using BlockVectorType = BlockVectorT<Number>;
     const unsigned int n_blocks =
       (type == TimeStepType::DG ? fe_degree + 1 : fe_degree) *
       n_timesteps_at_once;
@@ -124,6 +137,8 @@ test(dealii::ConditionalOStream &pcout,
 
     FullMatrix<Number> lhs_uK, lhs_uM, rhs_uK, rhs_uM, rhs_vM,
       zero(Gamma.m(), Gamma.n());
+    FullMatrix<NumberPreconditioner> lhs_uK_p, lhs_uM_p, rhs_uK_p, rhs_uM_p,
+      rhs_vM_p, zero_p(Gamma.m(), Gamma.n());
     std::unique_ptr<SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>
       rhs_matrix, rhs_matrix_v, matrix;
     if (problem == ProblemType::wave)
@@ -138,6 +153,7 @@ test(dealii::ConditionalOStream &pcout,
         rhs_uM = rhs_uM_;
         rhs_vM = rhs_vM_;
 
+        rhs_vM_p     = convert_to<NumberPreconditioner>(rhs_vM);
         rhs_matrix_v = std::make_unique<
           SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
           timer, K_mf, M_mf, zero, rhs_vM);
@@ -149,6 +165,10 @@ test(dealii::ConditionalOStream &pcout,
         rhs_uK = (type == TimeStepType::CGP) ? Gamma : zero;
         rhs_uM = (type == TimeStepType::CGP) ? Zeta : Gamma;
       }
+    lhs_uK_p = convert_to<NumberPreconditioner>(lhs_uK);
+    lhs_uM_p = convert_to<NumberPreconditioner>(lhs_uM);
+    rhs_uK_p = convert_to<NumberPreconditioner>(rhs_uK);
+    rhs_uM_p = convert_to<NumberPreconditioner>(rhs_uM);
     matrix =
       std::make_unique<SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
         timer, K_mf, M_mf, lhs_uK, lhs_uM);
@@ -173,21 +193,28 @@ test(dealii::ConditionalOStream &pcout,
                                                                 max_level);
     MGLevelObject<std::shared_ptr<const SparseMatrixType>> mg_K(min_level,
                                                                 max_level);
-    MGLevelObject<std::shared_ptr<const MatrixFreeOperator<dim, Number>>>
+    MGLevelObject<
+      std::shared_ptr<const MatrixFreeOperator<dim, NumberPreconditioner>>>
       mg_M_mf(min_level, max_level);
-    MGLevelObject<std::shared_ptr<const MatrixFreeOperator<dim, Number>>>
+    MGLevelObject<
+      std::shared_ptr<const MatrixFreeOperator<dim, NumberPreconditioner>>>
       mg_K_mf(min_level, max_level);
-    MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
+    MGLevelObject<
+      std::shared_ptr<const AffineConstraints<NumberPreconditioner>>>
       mg_constraints(min_level, max_level);
     MGLevelObject<std::shared_ptr<
-      const SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>>
+      const SystemMatrix<NumberPreconditioner,
+                         MatrixFreeOperator<dim, NumberPreconditioner>>>>
       mg_operators(min_level, max_level);
+    MGLevelObject<std::shared_ptr<PreconditionVanka<NumberPreconditioner>>>
+      precondition_vanka(min_level, max_level);
 
     for (unsigned int l = min_level; l <= max_level; ++l)
       {
         auto dof_handler_ =
           std::make_shared<DoFHandler<dim>>(*mg_triangulations[l]);
-        auto constraints_ = std::make_shared<AffineConstraints<double>>();
+        auto constraints_ =
+          std::make_shared<AffineConstraints<NumberPreconditioner>>();
         dof_handler_->distribute_dofs(fe);
 
         IndexSet locally_relevant_dofs;
@@ -200,15 +227,18 @@ test(dealii::ConditionalOStream &pcout,
         constraints_->close();
 
         // matrix-free operators
-        auto K_mf_ = std::make_shared<MatrixFreeOperator<dim, Number>>(
-          mapping, *dof_handler_, *constraints_, quad, 0.0, 1.0);
-        auto M_mf_ = std::make_shared<MatrixFreeOperator<dim, Number>>(
-          mapping, *dof_handler_, *constraints_, quad, 1.0, 0.0);
+        auto K_mf_ =
+          std::make_shared<MatrixFreeOperator<dim, NumberPreconditioner>>(
+            mapping, *dof_handler_, *constraints_, quad, 0.0, 1.0);
+        auto M_mf_ =
+          std::make_shared<MatrixFreeOperator<dim, NumberPreconditioner>>(
+            mapping, *dof_handler_, *constraints_, quad, 1.0, 0.0);
 
 
         mg_operators[l] = std::make_shared<
-          SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
-          timer, *K_mf_, *M_mf_, lhs_uK, lhs_uM);
+          SystemMatrix<NumberPreconditioner,
+                       MatrixFreeOperator<dim, NumberPreconditioner>>>(
+          timer, *K_mf_, *M_mf_, lhs_uK_p, lhs_uM_p);
 
         auto sparsity_pattern_ = std::make_shared<SparsityPatternType>(
           dof_handler_->locally_owned_dofs(),
@@ -235,27 +265,42 @@ test(dealii::ConditionalOStream &pcout,
         mg_K[l]                 = K_;
         mg_dof_handlers[l]      = dof_handler_;
         mg_constraints[l]       = constraints_;
+        precondition_vanka[l] =
+          std::make_shared<PreconditionVanka<NumberPreconditioner>>(
+            timer,
+            mg_K[l],
+            mg_M[l],
+            mg_sparsity_patterns[l],
+            lhs_uK_p,
+            lhs_uM_p,
+            mg_dof_handlers[l]);
       }
 
-    std::shared_ptr<MGSmoother<BlockVectorType>> smoother =
-      std::make_shared<VankaSmoother<Number>>(timer,
-                                              mg_K,
-                                              mg_M,
-                                              mg_sparsity_patterns,
-                                              lhs_uK,
-                                              lhs_uM,
-                                              mg_dof_handlers);
+
 
     // std::shared_ptr<MGSmootherBase<BlockVectorType>> smoother =
     //   std::make_shared<MGSmootherIdentity<BlockVectorType>>();
+    std::unique_ptr<BlockVectorT<NumberPreconditioner>> tmp1, tmp2;
+    if (!std::is_same_v<Number, NumberPreconditioner>)
+      {
+        tmp1 = std::make_unique<BlockVectorT<NumberPreconditioner>>();
+        tmp2 = std::make_unique<BlockVectorT<NumberPreconditioner>>();
+        matrix->initialize_dof_vector(*tmp1);
+        matrix->initialize_dof_vector(*tmp2);
+      }
     auto preconditioner = std::make_unique<
-      GMG<dim, SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>>(
+      GMG<dim,
+          NumberPreconditioner,
+          SystemMatrix<NumberPreconditioner,
+                       MatrixFreeOperator<dim, NumberPreconditioner>>>>(
       timer,
       dof_handler,
       mg_dof_handlers,
       mg_constraints,
       mg_operators,
-      smoother);
+      precondition_vanka,
+      std::move(tmp1),
+      std::move(tmp2));
     preconditioner->reinit();
     //
     /// GMG
@@ -347,34 +392,36 @@ test(dealii::ConditionalOStream &pcout,
                                                   *exact_solution,
                                                   evaluate_numerical_solution);
 
-    std::unique_ptr<TimeIntegrator<dim, Number>> step;
+    std::unique_ptr<TimeIntegrator<dim, Number, NumberPreconditioner>> step;
     if (problem == ProblemType::heat)
-      step = std::make_unique<TimeIntegratorHeat<dim, Number>>(
-        type,
-        fe_degree,
-        Alpha_1,
-        Gamma_1,
-        1.e-12,
-        *matrix,
-        *preconditioner,
-        *rhs_matrix,
-        integrate_rhs_function,
-        n_timesteps_at_once);
+      step =
+        std::make_unique<TimeIntegratorHeat<dim, Number, NumberPreconditioner>>(
+          type,
+          fe_degree,
+          Alpha_1,
+          Gamma_1,
+          1.e-12,
+          *matrix,
+          *preconditioner,
+          *rhs_matrix,
+          integrate_rhs_function,
+          n_timesteps_at_once);
     else
-      step = std::make_unique<TimeIntegratorWave<dim, Number>>(
-        type,
-        fe_degree,
-        Alpha_1,
-        Beta_1,
-        Gamma_1,
-        Zeta_1,
-        1.e-12,
-        *matrix,
-        *preconditioner,
-        *rhs_matrix,
-        *rhs_matrix_v,
-        integrate_rhs_function,
-        n_timesteps_at_once);
+      step =
+        std::make_unique<TimeIntegratorWave<dim, Number, NumberPreconditioner>>(
+          type,
+          fe_degree,
+          Alpha_1,
+          Beta_1,
+          Gamma_1,
+          Zeta_1,
+          1.e-12,
+          *matrix,
+          *preconditioner,
+          *rhs_matrix,
+          *rhs_matrix_v,
+          integrate_rhs_function,
+          n_timesteps_at_once);
 
     // interpolate initial value
     auto nt_dofs = static_cast<unsigned int>(n_blocks / n_timesteps_at_once);
@@ -392,12 +439,16 @@ test(dealii::ConditionalOStream &pcout,
                         << std::endl;
         prev_x = x.block(x.n_blocks() - 1);
         if (problem == ProblemType::heat)
-          static_cast<TimeIntegratorHeat<dim, Number> const *>(step.get())
+          static_cast<
+            TimeIntegratorHeat<dim, Number, NumberPreconditioner> const *>(
+            step.get())
             ->solve(x, prev_x, timestep_number, time, time_step_size);
         else
           {
             prev_v = v.block(v.n_blocks() - 1);
-            static_cast<TimeIntegratorWave<dim, Number> const *>(step.get())
+            static_cast<
+              TimeIntegratorWave<dim, Number, NumberPreconditioner> const *>(
+              step.get())
               ->solve(
                 x, v, prev_x, prev_v, timestep_number, time, time_step_size);
           }
@@ -499,17 +550,28 @@ main(int argc, char **argv)
   dealii::deallog.depth_console(0);
   MPI_Comm  comm = MPI_COMM_WORLD;
   const int dim  = 2;
-  test<dim>(pcout, comm, TimeStepType::DG, ProblemType::heat, 2);
-  test<dim>(pcout, comm, TimeStepType::CGP, ProblemType::heat, 2);
+// #define PRECONDITIONER_FLOAT
+#ifdef PRECONDITIONER_FLOAT
+#  define test test<dim, double, float>
+#else
+#  define test test<dim, double, double>
+#endif
+  dealii::deallog << "HEAT 2 steps at once" << std::endl;
+  test(pcout, comm, TimeStepType::DG, ProblemType::heat, 2);
+  test(pcout, comm, TimeStepType::CGP, ProblemType::heat, 2);
 
-  test<dim>(pcout, comm, TimeStepType::DG, ProblemType::heat);
-  test<dim>(pcout, comm, TimeStepType::CGP, ProblemType::heat);
+  dealii::deallog << "HEAT single step" << std::endl;
+  test(pcout, comm, TimeStepType::DG, ProblemType::heat);
+  test(pcout, comm, TimeStepType::CGP, ProblemType::heat);
 
-  test<dim>(pcout, comm, TimeStepType::DG, ProblemType::wave, 4);
-  test<dim>(pcout, comm, TimeStepType::CGP, ProblemType::wave, 4);
+  dealii::deallog << "WAVE 4 steps at once" << std::endl;
+  test(pcout, comm, TimeStepType::DG, ProblemType::wave, 4);
+  test(pcout, comm, TimeStepType::CGP, ProblemType::wave, 4);
 
-  test<dim>(pcout, comm, TimeStepType::DG, ProblemType::wave);
-  test<dim>(pcout, comm, TimeStepType::CGP, ProblemType::wave);
+  dealii::deallog << "WAVE single step" << std::endl;
+  test(pcout, comm, TimeStepType::DG, ProblemType::wave);
+  test(pcout, comm, TimeStepType::CGP, ProblemType::wave);
+#undef test
 
   dealii::deallog << std::endl;
   pcout << std::endl;
