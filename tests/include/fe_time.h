@@ -2,7 +2,9 @@
 
 #include <deal.II/base/quadrature_lib.h>
 
+#include <deal.II/fe/fe_dgq.h>
 #include <deal.II/fe/fe_q.h>
+#include <deal.II/fe/fe_tools.h>
 
 #include <array>
 
@@ -403,4 +405,139 @@ namespace dealii
         }
     return {{lhs_matrix, lhs_matrix_der, jump_matrix}};
   }
+
+  std::vector<size_t>
+  get_fe_q_permutation(FE_Q<1> const &fe_time)
+  {
+    size_t const        n_dofs = fe_time.n_dofs_per_cell();
+    std::vector<size_t> permutation(n_dofs, 0);
+    std::iota(permutation.begin() + 1, permutation.end() - 1, 2);
+    permutation.back() = 1;
+    return permutation;
+  }
+
+  FullMatrix<double>
+  get_time_projection_matrix(TimeStepType       type,
+                             unsigned int const r_src,
+                             unsigned int const r_dst,
+                             unsigned int const n_timesteps_at_once)
+  {
+    auto n_dofs_intvl_dst = (type == TimeStepType::DG) ? r_dst + 1 : r_dst;
+    auto n_dofs_intvl_src = (type == TimeStepType::DG) ? r_src + 1 : r_src;
+
+    auto n_dofs_dst = (type == TimeStepType::DG) ?
+                        n_timesteps_at_once * (r_dst + 1) :
+                        (n_timesteps_at_once * r_dst + 1);
+    auto n_dofs_src = (type == TimeStepType::DG) ?
+                        n_timesteps_at_once * (r_src + 1) :
+                        (n_timesteps_at_once * r_src + 1);
+
+    FullMatrix<double> projection(r_dst + 1, r_src + 1),
+      projection_n(n_dofs_dst, n_dofs_src);
+
+    if (type == TimeStepType::DG)
+      {
+        auto quad_time_src =
+          QGaussRadau<1>(r_src + 1, QGaussRadau<1>::EndPoint::right);
+        FE_DGQArbitraryNodes<1> fe_time_src(quad_time_src.get_points());
+        auto                    quad_time_dst =
+          QGaussRadau<1>(r_dst + 1, QGaussRadau<1>::EndPoint::right);
+        FE_DGQArbitraryNodes<1> fe_time_dst(quad_time_dst.get_points());
+        FETools::get_projection_matrix(fe_time_src, fe_time_dst, projection);
+      }
+    else
+      {
+        auto    quad_time_src = QGaussLobatto<1>(r_src + 1);
+        FE_Q<1> fe_time_src(quad_time_src.get_points());
+        auto    quad_time_dst = QGaussLobatto<1>(r_dst + 1);
+        FE_Q<1> fe_time_dst(quad_time_dst.get_points());
+
+        FullMatrix<double> projection_(fe_time_dst.n_dofs_per_cell(),
+                                       fe_time_src.n_dofs_per_cell());
+        FETools::get_projection_matrix(fe_time_src, fe_time_dst, projection_);
+        auto perm_dst = get_fe_q_permutation(fe_time_dst);
+        auto perm_src = get_fe_q_permutation(fe_time_src);
+        projection.fill_permutation(projection_, perm_dst, perm_src);
+      }
+
+    for (unsigned int it = 0; it < n_timesteps_at_once; ++it)
+      projection_n.fill(
+        projection, it * n_dofs_intvl_dst, it * n_dofs_intvl_src, 0, 0);
+
+    if (type == TimeStepType::CGP)
+      {
+        FullMatrix<double> projection_n_(n_dofs_dst - 1, n_dofs_src - 1);
+        projection_n_.fill(projection_n, 0, 0, 1, 1);
+        return projection_n_;
+      }
+    return projection_n;
+  }
+
+  FullMatrix<double>
+  get_time_prolongation_matrix(TimeStepType time_type, unsigned int const r)
+  {
+    FullMatrix<double> prolongation;
+    Quadrature<1>      quad_time;
+    if (time_type == TimeStepType::DG)
+      {
+        quad_time = QGaussRadau<1>(r + 1, QGaussRadau<1>::EndPoint::right);
+        FE_DGQArbitraryNodes<1> fe_time(quad_time.get_points());
+        auto left_interval  = fe_time.get_prolongation_matrix(0),
+             right_interval = fe_time.get_prolongation_matrix(1);
+        prolongation.reinit(2 * (r + 1), r + 1);
+        prolongation.fill(left_interval, 0, 0, 0, 0);
+        prolongation.fill(right_interval, left_interval.m(), 0, 0, 0);
+      }
+    else if (time_type == TimeStepType::CGP)
+      {
+        quad_time = QGaussLobatto<1>(r + 1);
+        FE_Q<1> fe_time(quad_time.get_points());
+        auto    left_interval_ = fe_time.get_prolongation_matrix(0),
+             right_interval_   = fe_time.get_prolongation_matrix(1);
+        FullMatrix<double> right_interval(r + 1, r + 1),
+          left_interval(r + 1, r + 1);
+        auto perm = get_fe_q_permutation(fe_time);
+        right_interval.fill_permutation(right_interval_, perm, perm);
+        left_interval.fill_permutation(left_interval_, perm, perm);
+        prolongation.reinit(2 * r, r);
+        prolongation.fill(left_interval, 0, 0, 1, 1);
+        prolongation.fill(right_interval, r, 0, 1, 1);
+      }
+    return prolongation;
+  }
+
+  FullMatrix<double>
+  get_time_restriction_matrix(TimeStepType time_type, unsigned int const r)
+  {
+    FullMatrix<double> restriction;
+    Quadrature<1>      quad_time;
+    if (time_type == TimeStepType::DG)
+      {
+        quad_time = QGaussRadau<1>(r + 1, QGaussRadau<1>::EndPoint::right);
+        FE_DGQArbitraryNodes<1> fe_time(quad_time.get_points());
+        auto left_interval  = fe_time.get_restriction_matrix(0),
+             right_interval = fe_time.get_restriction_matrix(1);
+        restriction.reinit(r + 1, 2 * (r + 1));
+        restriction.fill(left_interval, 0, 0, 0, 0);
+        restriction.fill(right_interval, 0, left_interval.n(), 0, 0);
+      }
+    else if (time_type == TimeStepType::CGP)
+      {
+        quad_time = QGaussLobatto<1>(r + 1);
+        FE_Q<1> fe_time(quad_time.get_points());
+
+        auto left_interval_  = fe_time.get_restriction_matrix(0),
+             right_interval_ = fe_time.get_restriction_matrix(1);
+        FullMatrix<double> right_interval(r + 1, r + 1),
+          left_interval(r + 1, r + 1);
+        auto perm = get_fe_q_permutation(fe_time);
+        right_interval.fill_permutation(right_interval_, perm, perm);
+        left_interval.fill_permutation(left_interval_, perm, perm);
+        restriction.reinit(r, 2 * r);
+        restriction.fill(left_interval, 0, 0, 1, 1);
+        restriction.fill(right_interval, 0, r, 1, 1);
+      }
+    return restriction;
+  }
+
 } // namespace dealii
