@@ -79,14 +79,17 @@ namespace dealii
       , Beta(Beta_)
       , alpha_is_zero(Alpha.all_zero())
       , beta_is_zero(Beta.all_zero())
-    {}
+    {
+      AssertDimension(Alpha.m(), Beta.m());
+      AssertDimension(Alpha.n(), Beta.n());
+    }
     void
     vmult(BlockVectorType &dst, const BlockVectorType &src) const
     {
       TimerOutput::Scope scope(timer, "vmult");
 
       const unsigned int n_blocks = src.n_blocks();
-
+      AssertDimension(Alpha.m(), n_blocks);
       dst = 0.0;
       VectorType tmp;
       K.initialize_dof_vector(tmp);

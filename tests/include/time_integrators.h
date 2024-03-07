@@ -15,15 +15,10 @@ namespace dealii
    * we would need a few extensions in order to integrate nonlinear terms
    * accurately.
    */
-  template <int dim, typename Number, typename NumberPreconditioner>
+  template <int dim, typename Number, typename Preconditioner>
   class TimeIntegrator
   {
   public:
-    using GMGPreconditioner =
-      GMG<dim,
-          NumberPreconditioner,
-          SystemMatrix<NumberPreconditioner,
-                       MatrixFreeOperator<dim, NumberPreconditioner>>>;
     using VectorType      = VectorT<Number>;
     using BlockVectorType = BlockVectorT<Number>;
 
@@ -34,7 +29,7 @@ namespace dealii
       FullMatrix<Number> const &Gamma_,
       double const              gmres_tolerance_,
       SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix_,
-      GMGPreconditioner const &preconditioner_,
+      Preconditioner const &preconditioner_,
       SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix_,
       std::function<void(const double, VectorType &)> integrate_rhs_function,
       unsigned int                                    n_timesteps_at_once_)
@@ -86,6 +81,12 @@ namespace dealii
           }
     }
 
+    unsigned int
+    last_step() const
+    {
+      return solver_control.last_step();
+    }
+
   protected:
     TimeStepType              type;
     unsigned int              time_degree;
@@ -95,7 +96,7 @@ namespace dealii
 
     mutable ReductionControl                                     solver_control;
     mutable SolverFGMRES<BlockVectorType>                        solver;
-    GMGPreconditioner const                                     &preconditioner;
+    Preconditioner const                                        &preconditioner;
     SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix;
     SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix;
     std::function<void(const double, VectorType &)> integrate_rhs_function;
@@ -103,19 +104,14 @@ namespace dealii
   };
 
 
-  template <int dim, typename Number, typename NumberPreconditioner = Number>
-  class TimeIntegratorHeat
-    : public TimeIntegrator<dim, Number, NumberPreconditioner>
+  template <int dim, typename Number, typename Preconditioner>
+  class TimeIntegratorHeat : public TimeIntegrator<dim, Number, Preconditioner>
   {
   public:
-    using GMGPreconditioner =
-      typename TimeIntegrator<dim, Number, NumberPreconditioner>::
-        GMGPreconditioner;
     using VectorType =
-      typename TimeIntegrator<dim, Number, NumberPreconditioner>::VectorType;
+      typename TimeIntegrator<dim, Number, Preconditioner>::VectorType;
     using BlockVectorType =
-      typename TimeIntegrator<dim, Number, NumberPreconditioner>::
-        BlockVectorType;
+      typename TimeIntegrator<dim, Number, Preconditioner>::BlockVectorType;
 
     TimeIntegratorHeat(
       TimeStepType              type_,
@@ -124,21 +120,20 @@ namespace dealii
       FullMatrix<Number> const &Gamma_,
       double const              gmres_tolerance_,
       SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix_,
-      GMGPreconditioner const &preconditioner_,
+      Preconditioner const &preconditioner_,
       SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix_,
       std::function<void(const double, VectorType &)> integrate_rhs_function,
       unsigned int                                    n_timesteps_at_once_)
-      : TimeIntegrator<dim, Number, NumberPreconditioner>(
-          type_,
-          time_degree_,
-          Alpha_,
-          Gamma_,
-          gmres_tolerance_,
-          matrix_,
-          preconditioner_,
-          rhs_matrix_,
-          integrate_rhs_function,
-          n_timesteps_at_once_)
+      : TimeIntegrator<dim, Number, Preconditioner>(type_,
+                                                    time_degree_,
+                                                    Alpha_,
+                                                    Gamma_,
+                                                    gmres_tolerance_,
+                                                    matrix_,
+                                                    preconditioner_,
+                                                    rhs_matrix_,
+                                                    integrate_rhs_function,
+                                                    n_timesteps_at_once_)
     {}
 
     void
@@ -169,19 +164,14 @@ namespace dealii
     }
   };
 
-  template <int dim, typename Number, typename NumberPreconditioner = Number>
-  class TimeIntegratorWave
-    : public TimeIntegrator<dim, Number, NumberPreconditioner>
+  template <int dim, typename Number, typename Preconditioner>
+  class TimeIntegratorWave : public TimeIntegrator<dim, Number, Preconditioner>
   {
   public:
-    using GMGPreconditioner =
-      typename TimeIntegrator<dim, Number, NumberPreconditioner>::
-        GMGPreconditioner;
     using VectorType =
-      typename TimeIntegrator<dim, Number, NumberPreconditioner>::VectorType;
+      typename TimeIntegrator<dim, Number, Preconditioner>::VectorType;
     using BlockVectorType =
-      typename TimeIntegrator<dim, Number, NumberPreconditioner>::
-        BlockVectorType;
+      typename TimeIntegrator<dim, Number, Preconditioner>::BlockVectorType;
 
     TimeIntegratorWave(
       TimeStepType              type_,
@@ -192,23 +182,22 @@ namespace dealii
       FullMatrix<Number> const &Zeta_,
       double const              gmres_tolerance_,
       SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix_,
-      GMGPreconditioner const &preconditioner_,
+      Preconditioner const &preconditioner_,
       SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix_,
       SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const
                                                      &rhs_matrix_v_,
       std::function<void(const double, VectorType &)> integrate_rhs_function,
       unsigned int                                    n_timesteps_at_once_)
-      : TimeIntegrator<dim, Number, NumberPreconditioner>(
-          type_,
-          time_degree_,
-          Alpha_,
-          Gamma_,
-          gmres_tolerance_,
-          matrix_,
-          preconditioner_,
-          rhs_matrix_,
-          integrate_rhs_function,
-          n_timesteps_at_once_)
+      : TimeIntegrator<dim, Number, Preconditioner>(type_,
+                                                    time_degree_,
+                                                    Alpha_,
+                                                    Gamma_,
+                                                    gmres_tolerance_,
+                                                    matrix_,
+                                                    preconditioner_,
+                                                    rhs_matrix_,
+                                                    integrate_rhs_function,
+                                                    n_timesteps_at_once_)
       , rhs_matrix_v(rhs_matrix_v_)
       , Beta(Beta_)
       , Zeta(Zeta_)

@@ -288,19 +288,19 @@ test(dealii::ConditionalOStream &pcout,
         matrix->initialize_dof_vector(*tmp1);
         matrix->initialize_dof_vector(*tmp2);
       }
-    auto preconditioner = std::make_unique<
+    using Preconditioner =
       GMG<dim,
           NumberPreconditioner,
           SystemMatrix<NumberPreconditioner,
-                       MatrixFreeOperator<dim, NumberPreconditioner>>>>(
-      timer,
-      dof_handler,
-      mg_dof_handlers,
-      mg_constraints,
-      mg_operators,
-      precondition_vanka,
-      std::move(tmp1),
-      std::move(tmp2));
+                       MatrixFreeOperator<dim, NumberPreconditioner>>>;
+    auto preconditioner = std::make_unique<Preconditioner>(timer,
+                                                           dof_handler,
+                                                           mg_dof_handlers,
+                                                           mg_constraints,
+                                                           mg_operators,
+                                                           precondition_vanka,
+                                                           std::move(tmp1),
+                                                           std::move(tmp2));
     preconditioner->reinit();
     //
     /// GMG
@@ -392,36 +392,34 @@ test(dealii::ConditionalOStream &pcout,
                                                   *exact_solution,
                                                   evaluate_numerical_solution);
 
-    std::unique_ptr<TimeIntegrator<dim, Number, NumberPreconditioner>> step;
+    std::unique_ptr<TimeIntegrator<dim, Number, Preconditioner>> step;
     if (problem == ProblemType::heat)
-      step =
-        std::make_unique<TimeIntegratorHeat<dim, Number, NumberPreconditioner>>(
-          type,
-          fe_degree,
-          Alpha_1,
-          Gamma_1,
-          1.e-12,
-          *matrix,
-          *preconditioner,
-          *rhs_matrix,
-          integrate_rhs_function,
-          n_timesteps_at_once);
+      step = std::make_unique<TimeIntegratorHeat<dim, Number, Preconditioner>>(
+        type,
+        fe_degree,
+        Alpha_1,
+        Gamma_1,
+        1.e-12,
+        *matrix,
+        *preconditioner,
+        *rhs_matrix,
+        integrate_rhs_function,
+        n_timesteps_at_once);
     else
-      step =
-        std::make_unique<TimeIntegratorWave<dim, Number, NumberPreconditioner>>(
-          type,
-          fe_degree,
-          Alpha_1,
-          Beta_1,
-          Gamma_1,
-          Zeta_1,
-          1.e-12,
-          *matrix,
-          *preconditioner,
-          *rhs_matrix,
-          *rhs_matrix_v,
-          integrate_rhs_function,
-          n_timesteps_at_once);
+      step = std::make_unique<TimeIntegratorWave<dim, Number, Preconditioner>>(
+        type,
+        fe_degree,
+        Alpha_1,
+        Beta_1,
+        Gamma_1,
+        Zeta_1,
+        1.e-12,
+        *matrix,
+        *preconditioner,
+        *rhs_matrix,
+        *rhs_matrix_v,
+        integrate_rhs_function,
+        n_timesteps_at_once);
 
     // interpolate initial value
     auto nt_dofs = static_cast<unsigned int>(n_blocks / n_timesteps_at_once);
@@ -439,15 +437,14 @@ test(dealii::ConditionalOStream &pcout,
                         << std::endl;
         prev_x = x.block(x.n_blocks() - 1);
         if (problem == ProblemType::heat)
-          static_cast<
-            TimeIntegratorHeat<dim, Number, NumberPreconditioner> const *>(
+          static_cast<TimeIntegratorHeat<dim, Number, Preconditioner> const *>(
             step.get())
             ->solve(x, prev_x, timestep_number, time, time_step_size);
         else
           {
             prev_v = v.block(v.n_blocks() - 1);
             static_cast<
-              TimeIntegratorWave<dim, Number, NumberPreconditioner> const *>(
+              TimeIntegratorWave<dim, Number, Preconditioner> const *>(
               step.get())
               ->solve(
                 x, v, prev_x, prev_v, timestep_number, time, time_step_size);
