@@ -16,6 +16,17 @@ enum class TimeStepType : unsigned int
   GCC = 3
 };
 
+enum class TimeMGType : bool
+{
+  tau = true,
+  k   = false,
+};
+bool
+operator!(TimeMGType mgt)
+{
+  return !static_cast<bool>(mgt); // true if k, false if tau
+}
+
 namespace dealii
 {
   template <typename Number>
@@ -26,9 +37,22 @@ namespace dealii
   std::array<FullMatrix<Number>, 2>
   get_cg_weights(unsigned int const r);
 
-  template <typename Number>
-  std::array<FullMatrix<Number>, 4>
-  get_fe_time_weights(TimeStepType type, unsigned int const r);
+  inline std::vector<TimeMGType>
+  get_time_mg_sequence(unsigned int const k_max,
+                       unsigned int const k_min,
+                       unsigned int const n_timesteps_at_once,
+                       unsigned int const n_timesteps_at_once_min = 1,
+                       TimeMGType const   lower_levels = TimeMGType::k)
+  {
+    unsigned int n_k_lvl = k_max - k_min + 1;
+    unsigned int n_t_lvl =
+      std::log2(n_timesteps_at_once / n_timesteps_at_once_min);
+    unsigned int n_fl         = !lower_levels ? n_k_lvl : n_t_lvl;
+    auto         upper_levels = static_cast<TimeMGType>(!lower_levels);
+    std::vector<TimeMGType> mg_type_level(n_k_lvl + n_t_lvl, lower_levels);
+    std::fill(mg_type_level.begin() + n_fl, mg_type_level.end(), upper_levels);
+    return mg_type_level;
+  }
 
   template <typename Number>
   std::array<FullMatrix<Number>, 5>
@@ -262,6 +286,59 @@ namespace dealii
     return ret;
   }
 
+  template <typename Number, typename NumberPreconditioner = Number>
+  std::vector<std::array<FullMatrix<NumberPreconditioner>, 4>>
+  get_fe_time_weights(TimeStepType                   type,
+                      unsigned int                   r,
+                      double                         time_step_size,
+                      unsigned int                   n_timesteps_at_once,
+                      std::vector<TimeMGType> const &mg_type_level)
+  {
+    std::vector<std::array<FullMatrix<NumberPreconditioner>, 4>> time_weights(
+      mg_type_level.size());
+    auto tw = time_weights.rbegin();
+    for (auto mgt = mg_type_level.rbegin(); mgt != mg_type_level.rend();
+         ++mgt, ++tw)
+      {
+        *tw = get_fe_time_weights<NumberPreconditioner>(type,
+                                                        r,
+                                                        time_step_size,
+                                                        n_timesteps_at_once);
+        if (*mgt == TimeMGType::k)
+          --r;
+        else
+          n_timesteps_at_once /= 2, time_step_size *= 2;
+      }
+    return time_weights;
+  }
+
+  template <typename Number, typename NumberPreconditioner = Number>
+  std::vector<std::array<FullMatrix<NumberPreconditioner>, 5>>
+  get_fe_time_weights_wave(TimeStepType                   type,
+                           unsigned int                   r,
+                           double                         time_step_size,
+                           unsigned int                   n_timesteps_at_once,
+                           std::vector<TimeMGType> const &mg_type_level)
+  {
+    auto time_weights = get_fe_time_weights<Number, NumberPreconditioner>(
+      type, r, time_step_size, n_timesteps_at_once, mg_type_level);
+    std::vector<std::array<FullMatrix<NumberPreconditioner>, 5>>
+         time_weights_wave(mg_type_level.size());
+    auto tw      = time_weights.rbegin();
+    auto tw_wave = time_weights_wave.rbegin();
+    for (auto mgt = mg_type_level.rbegin(); mgt != mg_type_level.rend();
+         ++mgt, ++tw, ++tw_wave)
+      {
+        *tw_wave = get_fe_time_weights_wave(
+          type, (*tw)[0], (*tw)[1], (*tw)[2], (*tw)[3]);
+        if (*mgt == TimeMGType::k)
+          --r;
+        else
+          n_timesteps_at_once /= 2, time_step_size *= 2;
+      }
+    return time_weights_wave;
+  }
+
   template <typename Number>
   std::vector<Polynomials::Polynomial<Number>>
   get_time_basis(TimeStepType type, unsigned int const r)
@@ -474,9 +551,14 @@ namespace dealii
   }
 
   FullMatrix<double>
-  get_time_prolongation_matrix(TimeStepType time_type, unsigned int const r)
+  get_time_prolongation_matrix(TimeStepType       time_type,
+                               unsigned int const r,
+                               unsigned int const n_timesteps_at_once = 2)
   {
-    FullMatrix<double> prolongation;
+    Assert((n_timesteps_at_once > 1 &&
+            ((n_timesteps_at_once & (n_timesteps_at_once - 1)) == 0)),
+           ExcMessage("Has to be a power of 2 and more than one timestep"));
+    FullMatrix<double> prolongation, prolongation_n;
     Quadrature<1>      quad_time;
     if (time_type == TimeStepType::DG)
       {
@@ -503,13 +585,25 @@ namespace dealii
         prolongation.fill(left_interval, 0, 0, 1, 1);
         prolongation.fill(right_interval, r, 0, 1, 1);
       }
-    return prolongation;
+    auto n_dofs_intvl = (time_type == TimeStepType::DG) ? r + 1 : r;
+    prolongation_n.reinit(n_dofs_intvl * n_timesteps_at_once,
+                          n_dofs_intvl * n_timesteps_at_once / 2);
+    for (unsigned int it = 0; it < n_timesteps_at_once / 2; ++it)
+      prolongation_n.fill(
+        prolongation, it * 2 * n_dofs_intvl, it * n_dofs_intvl, 0, 0);
+
+    return prolongation_n;
   }
 
   FullMatrix<double>
-  get_time_restriction_matrix(TimeStepType time_type, unsigned int const r)
+  get_time_restriction_matrix(TimeStepType       time_type,
+                              unsigned int const r,
+                              unsigned int const n_timesteps_at_once = 2)
   {
-    FullMatrix<double> restriction;
+    Assert((n_timesteps_at_once > 1 &&
+            ((n_timesteps_at_once & (n_timesteps_at_once - 1)) == 0)),
+           ExcMessage("Has to be a power of 2 and more than one timestep"));
+    FullMatrix<double> restriction, restriction_n;
     Quadrature<1>      quad_time;
     if (time_type == TimeStepType::DG)
       {
@@ -537,7 +631,14 @@ namespace dealii
         restriction.fill(left_interval, 0, 0, 1, 1);
         restriction.fill(right_interval, 0, r, 1, 1);
       }
-    return restriction;
+    auto n_dofs_intvl = (time_type == TimeStepType::DG) ? r + 1 : r;
+    restriction_n.reinit(n_dofs_intvl * n_timesteps_at_once / 2,
+                         n_dofs_intvl * n_timesteps_at_once);
+    for (unsigned int it = 0; it < n_timesteps_at_once / 2; ++it)
+      restriction_n.fill(
+        restriction, it * n_dofs_intvl, it * 2 * n_dofs_intvl, 0, 0);
+
+    return restriction_n;
   }
 
 } // namespace dealii
