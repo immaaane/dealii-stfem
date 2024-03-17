@@ -78,8 +78,13 @@ test_tw(TimeStepType       type,
         unsigned int const n_timesteps_at_once = 4)
 {
   std::cout << "Test MG in time operators\n";
-  std::vector<TimeMGType> mg_type_level = get_time_mg_sequence(
-    r, type == TimeStepType::DG ? 0 : 1, n_timesteps_at_once, 1, TimeMGType::k);
+  std::vector<TimeMGType> mg_type_level =
+    get_time_mg_sequence(1,
+                         r,
+                         type == TimeStepType::DG ? 0 : 1,
+                         n_timesteps_at_once,
+                         1,
+                         TimeMGType::k);
   auto fetw = get_fe_time_weights<double>(
     type, r, 0.25, n_timesteps_at_once, mg_type_level);
   auto fetw_wave = get_fe_time_weights_wave<double>(

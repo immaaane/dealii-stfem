@@ -11,12 +11,390 @@
 #include <deal.II/multigrid/mg_matrix.h>
 #include <deal.II/multigrid/mg_smoother.h>
 #include <deal.II/multigrid/mg_transfer_global_coarsening.h>
+#include <deal.II/multigrid/mg_transfer_global_coarsening.templates.h>
 #include <deal.II/multigrid/multigrid.h>
+
+#include <variant>
 
 #include "fe_time.h"
 #include "types.h"
+
+
+enum class TransferType : bool
+{
+  Time  = true,
+  Space = false,
+};
+
 namespace dealii
 {
+  template <int dim, typename Number>
+  class MGTwoLevelBlockTransfer
+  {
+    using VectorType      = VectorT<Number>;
+    using BlockVectorType = BlockVectorT<Number>;
+    std::vector<SmartPointer<const MGTwoLevelTransfer<dim, VectorType>>>
+      transfer;
+
+  public:
+    MGTwoLevelBlockTransfer() = default;
+    MGTwoLevelBlockTransfer(
+      MGTwoLevelTransfer<dim, VectorType> const &transfer_)
+      : transfer(1,
+                 &const_cast<MGTwoLevelTransfer<dim, VectorType> &>(
+                   static_cast<const MGTwoLevelTransfer<dim, VectorType> &>(
+                     Utilities::get_underlying_value(transfer_))))
+    {}
+    MGTwoLevelBlockTransfer(MGTwoLevelBlockTransfer const &other)
+      : transfer(other.transfer)
+    {}
+
+    MGTwoLevelBlockTransfer(
+      std::vector<MGTwoLevelTransfer<dim, VectorType>> const &)
+    {
+      Assert(false, ExcInternalError()); // Implement for multiple variables
+    }
+
+    void
+    prolongate_and_add(BlockVectorType &dst, const BlockVectorType &src) const
+    {
+      for (unsigned int i = 0; i < src.n_blocks(); ++i)
+        transfer.front()->prolongate_and_add(dst.block(i), src.block(i));
+    }
+
+    void
+    restrict_and_add(BlockVectorType &dst, const BlockVectorType &src) const
+    {
+      for (unsigned int i = 0; i < src.n_blocks(); ++i)
+        transfer.front()->restrict_and_add(dst.block(i), src.block(i));
+    }
+  };
+
+  template <typename Number>
+  class MGTwoLevelTransferST
+  {
+    using BlockVectorType = BlockVectorT<Number>;
+    FullMatrix<Number> prolongation_matrix;
+    FullMatrix<Number> restriction_matrix;
+
+  public:
+    MGTwoLevelTransferST() = default;
+    MGTwoLevelTransferST(TimeStepType const type,
+                         unsigned int       r,
+                         unsigned int       n_timesteps_at_once,
+                         const bool restrict_is_transpose_prolongate = false,
+                         TimeMGType mg_type = TimeMGType::tau)
+    {
+      bool k_mg = mg_type == TimeMGType::k;
+
+      prolongation_matrix =
+        k_mg ?
+          get_time_projection_matrix<Number>(type,
+                                             r - 1,
+                                             r,
+                                             n_timesteps_at_once) :
+          get_time_prolongation_matrix<Number>(type, r, n_timesteps_at_once);
+      if (restrict_is_transpose_prolongate)
+        {
+          restriction_matrix.reinit(prolongation_matrix.n(),
+                                    prolongation_matrix.m());
+          restriction_matrix.copy_transposed(prolongation_matrix);
+        }
+      else
+        restriction_matrix =
+          k_mg ?
+            get_time_projection_matrix<Number>(type,
+                                               r,
+                                               r - 1,
+                                               n_timesteps_at_once) :
+            get_time_restriction_matrix<Number>(type, r, n_timesteps_at_once);
+    }
+    MGTwoLevelTransferST(MGTwoLevelTransferST<Number> const &other)
+      : prolongation_matrix(other.prolongation_matrix)
+      , restriction_matrix(other.restriction_matrix)
+    {}
+
+    void
+    prolongate_and_add(BlockVectorType &dst, const BlockVectorType &src) const
+    {
+      AssertDimension(prolongation_matrix.n(), src.n_blocks());
+      AssertDimension(prolongation_matrix.m(), dst.n_blocks());
+      tensorproduct_add(dst, prolongation_matrix, src);
+    }
+
+    void
+    restrict_and_add(BlockVectorType &dst, const BlockVectorType &src) const
+    {
+      AssertDimension(restriction_matrix.n(), src.n_blocks());
+      AssertDimension(restriction_matrix.m(), dst.n_blocks());
+      tensorproduct_add(dst, restriction_matrix, src);
+    }
+  };
+
+  template <int dim, typename Number>
+  class TwoLevelTransferOperator
+  {
+    using VectorType      = VectorT<Number>;
+    using BlockVectorType = BlockVectorT<Number>;
+    std::variant<MGTwoLevelBlockTransfer<dim, Number>,
+                 MGTwoLevelTransferST<Number>>
+      transfer_variant;
+
+  public:
+    TwoLevelTransferOperator(
+      MGTwoLevelTransfer<dim, VectorType> const &transfer)
+      : transfer_variant(MGTwoLevelBlockTransfer<dim, Number>(transfer))
+    {}
+    TwoLevelTransferOperator(MGTwoLevelTransferST<Number> const &transfer)
+      : transfer_variant(transfer)
+    {}
+    TwoLevelTransferOperator(TwoLevelTransferOperator<dim, Number> const &other)
+      : transfer_variant(other.transfer_variant)
+    {}
+    TwoLevelTransferOperator &
+    operator=(const TwoLevelTransferOperator &) = default;
+    TwoLevelTransferOperator()                  = default;
+
+    void
+    prolongate_and_add(BlockVectorType &dst, const BlockVectorType &src) const
+    {
+      std::visit([&dst, &src](
+                   auto &transfer) { transfer.prolongate_and_add(dst, src); },
+                 transfer_variant);
+    }
+
+    void
+    restrict_and_add(BlockVectorType &dst, const BlockVectorType &src) const
+    {
+      std::visit([&dst, &src](
+                   auto &transfer) { transfer.restrict_and_add(dst, src); },
+                 transfer_variant);
+    }
+  };
+
+  template <int dim, typename Number>
+  class STMGTransferBlockMatrixFree final
+    : public MGTransferBase<BlockVectorT<Number>>
+  {
+    using VectorType      = VectorT<Number>;
+    using BlockVectorType = BlockVectorT<Number>;
+
+  public:
+    STMGTransferBlockMatrixFree(
+      std::vector<std::shared_ptr<MGTwoLevelTransfer<dim, VectorType>>> const
+        &space_transfers_,
+      MGLevelObject<TwoLevelTransferOperator<dim, Number>> const &transfers_,
+      std::vector<unsigned int>                                   n_blocks_,
+      std::vector<std::shared_ptr<const Utilities::MPI::Partitioner>>
+        partitioners_)
+      : space_transfers(space_transfers_)
+      , transfer(transfers_)
+      , n_blocks(n_blocks_)
+      , partitioners(partitioners_)
+    {}
+
+    virtual ~STMGTransferBlockMatrixFree() override = default;
+
+    void
+    prolongate(const unsigned int     to_level,
+               BlockVectorType       &dst,
+               const BlockVectorType &src) const override final
+    {
+      dst = Number(0.0);
+      prolongate_and_add(to_level, dst, src);
+    }
+
+    void
+    prolongate_and_add(const unsigned int     to_level,
+                       BlockVectorType       &dst,
+                       const BlockVectorType &src) const override final
+    {
+      transfer[to_level].prolongate_and_add(dst, src);
+    }
+
+    void
+    restrict_and_add(const unsigned int     from_level,
+                     BlockVectorType       &dst,
+                     const BlockVectorType &src) const override final
+    {
+      transfer[from_level].restrict_and_add(dst, src);
+    }
+
+    template <typename BlockVectorType2>
+    void
+    copy_from_mg(const std::vector<const DoFHandler<dim> *> &,
+                 BlockVectorType2                     &dst,
+                 const MGLevelObject<BlockVectorType> &src) const
+    {
+      if (dst.n_blocks() != n_blocks.back())
+        dst.reinit(n_blocks.back());
+      dst.zero_out_ghost_values();
+      dst.copy_locally_owned_data_from(src[src.max_level()]);
+    }
+
+    template <typename BlockVectorType2>
+    void
+    copy_from_mg(const DoFHandler<dim> &,
+                 BlockVectorType2                     &dst,
+                 const MGLevelObject<BlockVectorType> &src) const
+    {
+      const std::vector<const DoFHandler<dim> *> mg_dofs;
+      copy_from_mg(mg_dofs, dst, src);
+    }
+
+    template <typename BlockVectorType2>
+    void
+    copy_to_mg(const DoFHandler<dim>          &dof_handler,
+               MGLevelObject<BlockVectorType> &dst,
+               const BlockVectorType2         &src) const
+    {
+      Assert(same_for_all,
+             ExcMessage(
+               "This object was initialized with support for usage with one "
+               "DoFHandler for each block, but this method assumes that "
+               "the same DoFHandler is used for all the blocks!"));
+      const std::vector<const DoFHandler<dim> *> mg_dofs(src.n_blocks(),
+                                                         &dof_handler);
+      copy_to_mg(mg_dofs, dst, src);
+    }
+
+    template <typename BlockVectorType2>
+    void
+    copy_to_mg(const std::vector<const DoFHandler<dim> *> &,
+               MGLevelObject<BlockVectorType> &dst,
+               const BlockVectorType2         &src) const
+    {
+      AssertDimension(n_blocks.back(), src.n_blocks());
+      for (unsigned int level = dst.min_level(); level <= dst.max_level();
+           ++level)
+        {
+          if (dst[level].n_blocks() != n_blocks[level])
+            dst[level].reinit(n_blocks[level]);
+          initialize_dof_vector(level, dst[level], level == dst.max_level());
+        }
+      dst[dst.max_level()].copy_locally_owned_data_from(src);
+    }
+
+  private:
+    void
+    initialize_dof_vector(const unsigned int level,
+                          BlockVectorType   &vec,
+                          const bool         omit_zeroing_entries) const
+    {
+      for (unsigned int i = 0; i < vec.n_blocks(); ++i)
+        {
+          auto const &partitioner = partitioners[level - transfer.min_level()];
+          Assert(partitioners.empty() || (transfer.min_level() <= level &&
+                                          level <= transfer.max_level()),
+                 ExcInternalError());
+
+          if (vec.block(i).get_partitioner().get() == partitioner.get() ||
+              (vec.block(i).size() == partitioner->size() &&
+               vec.block(i).locally_owned_size() ==
+                 partitioner->locally_owned_size()))
+            {
+              if (!omit_zeroing_entries)
+                vec.block(i) = 0;
+            }
+          else
+            vec.block(i).reinit(partitioner, omit_zeroing_entries);
+        }
+    }
+
+    bool same_for_all = true;
+    std::vector<std::shared_ptr<MGTwoLevelTransfer<dim, VectorType>>>
+                                                         space_transfers;
+    MGLevelObject<TwoLevelTransferOperator<dim, Number>> transfer;
+    std::vector<unsigned int>                            n_blocks;
+    std::vector<std::shared_ptr<const Utilities::MPI::Partitioner>>
+      partitioners;
+  };
+
+  template <int dim, typename Number>
+  auto
+  build_stmg_transfers(
+    TimeStepType const type,
+    unsigned int       r,
+    unsigned int       n_timesteps_at_once,
+    const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>>
+      &mg_dof_handlers,
+    const MGLevelObject<std::shared_ptr<const AffineConstraints<Number>>>
+      &mg_constraints,
+    const std::function<void(const unsigned int, VectorT<Number> &)>
+                                  &initialize_dof_vector,
+    const bool                     restrict_is_transpose_prolongate,
+    const std::vector<TimeMGType> &mg_type_level)
+  {
+    using BlockVectorType        = BlockVectorT<Number>;
+    using VectorType             = VectorT<Number>;
+    unsigned int const min_level = mg_dof_handlers.min_level();
+    unsigned int const max_level = mg_dof_handlers.max_level();
+    unsigned int const n_levels  = mg_dof_handlers.n_levels();
+    AssertDimension(n_levels - 1, mg_type_level.size());
+    MGLevelObject<TwoLevelTransferOperator<dim, Number>> transfer(min_level,
+                                                                  max_level);
+    std::vector<unsigned int>                            n_blocks(n_levels);
+    std::vector<std::shared_ptr<const Utilities::MPI::Partitioner>>
+      partitioners(n_levels);
+    std::vector<std::shared_ptr<MGTwoLevelTransfer<dim, VectorType>>>
+      space_transfers(n_levels);
+
+    unsigned int n_k_levels = 0, n_tau_levels = 0;
+    for (auto const &el : mg_type_level)
+      if (el == TimeMGType::k)
+        ++n_k_levels;
+      else if (el == TimeMGType::tau)
+        ++n_tau_levels;
+
+    Assert((type == TimeStepType::DG ? r + 1 : r >= n_k_levels),
+           ExcLowerRange(r, n_k_levels));
+    unsigned int n_dofs_intvl   = (type == TimeStepType::DG) ? r + 1 : r;
+    unsigned int n_blocks_level = n_dofs_intvl * n_timesteps_at_once;
+    unsigned int i              = n_levels - 1;
+    n_blocks[i]                 = n_blocks_level;
+
+    for (unsigned int l = min_level; l <= max_level; ++l)
+      {
+        VectorType vector;
+        initialize_dof_vector(l, vector);
+        partitioners[l - min_level] = vector.get_partitioner();
+      }
+    for (auto mgt = mg_type_level.rbegin(); mgt != mg_type_level.rend();
+         ++mgt, --i)
+      {
+        if (*mgt == TimeMGType::none)
+          {
+            space_transfers[i] =
+              std::make_shared<MGTwoLevelTransfer<dim, VectorType>>();
+            space_transfers[i]->reinit(*mg_dof_handlers[i],
+                                       *mg_dof_handlers[i - 1],
+                                       *mg_constraints[i],
+                                       *mg_constraints[i - 1]);
+            space_transfers[i]->enable_inplace_operations_if_possible(
+              partitioners[i - 1], partitioners[i]);
+            transfer[i] =
+              TwoLevelTransferOperator<dim, Number>(*space_transfers[i]);
+          }
+        else
+          transfer[i] = TwoLevelTransferOperator<dim, Number>(
+            MGTwoLevelTransferST<Number>(type,
+                                         r,
+                                         n_timesteps_at_once,
+                                         restrict_is_transpose_prolongate,
+                                         *mgt));
+
+        if (*mgt == TimeMGType::k)
+          --r, --n_dofs_intvl;
+        else if (*mgt == TimeMGType::tau)
+          n_timesteps_at_once /= 2;
+        n_blocks_level  = n_dofs_intvl * n_timesteps_at_once;
+        n_blocks[i - 1] = n_blocks_level;
+      }
+
+    return std::make_unique<STMGTransferBlockMatrixFree<dim, Number>>(
+      space_transfers, transfer, n_blocks, partitioners);
+  }
+
   template <typename Number>
   class PreconditionVanka
   {
@@ -133,7 +511,11 @@ namespace dealii
 
     void
     clear()
-    {}
+    {
+      indices.clear();
+      valence.reinit(0);
+      blocks.clear();
+    }
 
     void
     smooth(BlockVectorType &u, BlockVectorType const &rhs) const
@@ -168,6 +550,8 @@ namespace dealii
     unsigned int coarse_grid_maxiter = 1000;
     double       coarse_grid_abstol  = 1e-20;
     double       coarse_grid_reltol  = 1e-4;
+
+    const bool restrict_is_transpose_prolongate = true;
   };
   template <int dim, typename Number, typename LevelMatrixType>
   class GMG
@@ -175,7 +559,7 @@ namespace dealii
     using BlockVectorType = BlockVectorT<Number>;
     using VectorType      = VectorT<Number>;
 
-    using MGTransferType = MGTransferBlockGlobalCoarsening<dim, VectorType>;
+    using MGTransferType = STMGTransferBlockMatrixFree<dim, Number>;
 
     using SmootherPreconditionerType = PreconditionVanka<Number>;
     using SmootherType =
@@ -185,8 +569,12 @@ namespace dealii
 
   public:
     GMG(
-      TimerOutput           &timer,
-      const DoFHandler<dim> &dof_handler,
+      TimerOutput                   &timer,
+      TimeStepType const             type,
+      unsigned int const             r,
+      unsigned int const             n_timesteps_at_once,
+      const std::vector<TimeMGType> &mg_type_level,
+      const DoFHandler<dim>         &dof_handler,
       const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>>
         &mg_dof_handlers,
       const MGLevelObject<std::shared_ptr<const AffineConstraints<Number>>>
@@ -206,23 +594,19 @@ namespace dealii
       , precondition_vanka(mg_smoother_)
       , min_level(mg_dof_handlers.min_level())
       , max_level(mg_dof_handlers.max_level())
-      , transfers(min_level, max_level)
     {
-      // setup transfer operators
-      for (auto l = min_level; l < max_level; ++l)
-        transfers[l + 1].reinit(*mg_dof_handlers[l + 1],
-                                *mg_dof_handlers[l],
-                                *mg_constraints[l + 1],
-                                *mg_constraints[l]);
-      transfer_scalar =
-        std::make_unique<MGTransferGlobalCoarsening<dim, VectorType>>(
-          transfers, [&](const auto l, auto &vec) {
-            this->mg_operators[l]->initialize_dof_vector(vec);
-          });
-
-      transfer_block =
-        std::make_unique<MGTransferBlockGlobalCoarsening<dim, VectorType>>(
-          *transfer_scalar);
+      PreconditionerGMGAdditionalData additional_data;
+      transfer_block = build_stmg_transfers<dim, Number>(
+        type,
+        r,
+        n_timesteps_at_once,
+        mg_dof_handlers,
+        mg_constraints,
+        [&](const unsigned int l, VectorType &vec) {
+          this->mg_operators[l]->initialize_dof_vector(vec);
+        },
+        additional_data.restrict_is_transpose_prolongate,
+        mg_type_level);
     }
 
     void
@@ -397,9 +781,6 @@ namespace dealii
     const unsigned int min_level;
     const unsigned int max_level;
 
-    MGLevelObject<MGTwoLevelTransfer<dim, VectorType>> transfers;
-    std::unique_ptr<MGTransferGlobalCoarsening<dim, VectorType>>
-                                    transfer_scalar;
     std::unique_ptr<MGTransferType> transfer_block;
 
     mutable mg::Matrix<BlockVectorType> mg_matrix;
