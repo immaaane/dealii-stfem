@@ -48,9 +48,10 @@ test(dealii::ConditionalOStream &pcout,
   ConvergenceTable table;
   MappingQ1<dim>   mapping;
 
-  const bool print_timing = false;
-
-  auto convergence_test = [&](int const          refinement,
+  const bool print_timing      = false;
+  const bool space_time_mg     = true;
+  const bool time_before_space = false;
+  auto       convergence_test  = [&](int const          refinement,
                               unsigned int const fe_degree,
                               bool               do_output,
                               unsigned int       n_timesteps_at_once) {
@@ -59,7 +60,7 @@ test(dealii::ConditionalOStream &pcout,
     const unsigned int n_blocks =
       (type == TimeStepType::DG ? fe_degree + 1 : fe_degree) *
       n_timesteps_at_once;
-    auto const  basis = get_time_basis<Number>(type, fe_degree);
+    auto const  basis = get_time_basis(type, fe_degree);
     FE_Q<dim>   fe(fe_degree + 1);
     QGauss<dim> quad(fe.tensor_degree() + 1);
 
@@ -137,8 +138,6 @@ test(dealii::ConditionalOStream &pcout,
 
     FullMatrix<Number> lhs_uK, lhs_uM, rhs_uK, rhs_uM, rhs_vM,
       zero(Gamma.m(), Gamma.n());
-    FullMatrix<NumberPreconditioner> lhs_uK_p, lhs_uM_p, rhs_uK_p, rhs_uM_p,
-      rhs_vM_p, zero_p(Gamma.m(), Gamma.n());
     std::unique_ptr<SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>
       rhs_matrix, rhs_matrix_v, matrix;
     if (problem == ProblemType::wave)
@@ -147,13 +146,11 @@ test(dealii::ConditionalOStream &pcout,
           get_fe_time_weights_wave(
             type, Alpha_1, Beta_1, Gamma_1, Zeta_1, n_timesteps_at_once);
 
-        lhs_uK = Alpha_lhs;
-        lhs_uM = Beta_lhs;
-        rhs_uK = rhs_uK_;
-        rhs_uM = rhs_uM_;
-        rhs_vM = rhs_vM_;
-
-        rhs_vM_p     = convert_to<NumberPreconditioner>(rhs_vM);
+        lhs_uK       = Alpha_lhs;
+        lhs_uM       = Beta_lhs;
+        rhs_uK       = rhs_uK_;
+        rhs_uM       = rhs_uM_;
+        rhs_vM       = rhs_vM_;
         rhs_matrix_v = std::make_unique<
           SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
           timer, K_mf, M_mf, zero, rhs_vM);
@@ -165,10 +162,6 @@ test(dealii::ConditionalOStream &pcout,
         rhs_uK = (type == TimeStepType::CGP) ? Gamma : zero;
         rhs_uM = (type == TimeStepType::CGP) ? Zeta : Gamma;
       }
-    lhs_uK_p = convert_to<NumberPreconditioner>(lhs_uK);
-    lhs_uM_p = convert_to<NumberPreconditioner>(lhs_uM);
-    rhs_uK_p = convert_to<NumberPreconditioner>(rhs_uK);
-    rhs_uM_p = convert_to<NumberPreconditioner>(rhs_uM);
     matrix =
       std::make_unique<SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
         timer, K_mf, M_mf, lhs_uK, lhs_uM);
@@ -181,6 +174,25 @@ test(dealii::ConditionalOStream &pcout,
     std::vector<std::shared_ptr<const Triangulation<dim>>> mg_triangulations =
       MGTransferGlobalCoarseningTools::create_geometric_coarsening_sequence(
         tria, policy);
+    const int    lowest_degree = type == TimeStepType::DG ? 0u : 1u;
+    unsigned int fe_degree_mg =
+      std::max(static_cast<int>(fe_degree) - 1, lowest_degree);
+    unsigned int fe_degree_min = space_time_mg ? fe_degree_mg : fe_degree;
+    unsigned int n_timesteps_min = space_time_mg ?
+                                            std::max(n_timesteps_at_once / 2, 1u) :
+                                            n_timesteps_at_once;
+    std::vector<TimeMGType> mg_type_level =
+      get_time_mg_sequence(mg_triangulations.size(),
+                           fe_degree,
+                           fe_degree_min,
+                           n_timesteps_at_once,
+                           n_timesteps_min,
+                           TimeMGType::k,
+                           time_before_space);
+    mg_triangulations =
+      get_space_time_triangulation(mg_type_level, mg_triangulations);
+
+
     const unsigned int min_level = 0;
     const unsigned int max_level = mg_triangulations.size() - 1;
     pcout << ":: Min Level " << min_level << "  Max Level " << max_level
@@ -208,6 +220,14 @@ test(dealii::ConditionalOStream &pcout,
       mg_operators(min_level, max_level);
     MGLevelObject<std::shared_ptr<PreconditionVanka<NumberPreconditioner>>>
       precondition_vanka(min_level, max_level);
+    std::vector<std::array<FullMatrix<NumberPreconditioner>, 4>> fetw;
+    std::vector<std::array<FullMatrix<NumberPreconditioner>, 5>> fetw_w;
+    if (problem == ProblemType::heat)
+      fetw = get_fe_time_weights<Number, NumberPreconditioner>(
+        type, fe_degree, time_step_size, n_timesteps_at_once, mg_type_level);
+    else if (problem == ProblemType::wave)
+      fetw_w = get_fe_time_weights_wave<Number, NumberPreconditioner>(
+        type, fe_degree, time_step_size, n_timesteps_at_once, mg_type_level);
 
     for (unsigned int l = min_level; l <= max_level; ++l)
       {
@@ -234,6 +254,10 @@ test(dealii::ConditionalOStream &pcout,
           std::make_shared<MatrixFreeOperator<dim, NumberPreconditioner>>(
             mapping, *dof_handler_, *constraints_, quad, 1.0, 0.0);
 
+        auto const &lhs_uK_p =
+          problem == ProblemType::heat ? fetw[l][0] : fetw_w[l][0];
+        auto const &lhs_uM_p =
+          problem == ProblemType::heat ? fetw[l][1] : fetw_w[l][1];
 
         mg_operators[l] = std::make_shared<
           SystemMatrix<NumberPreconditioner,
@@ -294,6 +318,10 @@ test(dealii::ConditionalOStream &pcout,
           SystemMatrix<NumberPreconditioner,
                        MatrixFreeOperator<dim, NumberPreconditioner>>>;
     auto preconditioner = std::make_unique<Preconditioner>(timer,
+                                                           type,
+                                                           fe_degree,
+                                                           n_timesteps_at_once,
+                                                           mg_type_level,
                                                            dof_handler,
                                                            mg_dof_handlers,
                                                            mg_constraints,
@@ -358,8 +386,8 @@ test(dealii::ConditionalOStream &pcout,
               else
                 tmp.add(v,
                         (block_offset + i == 0) ?
-                          prev_x :
-                          x.block(block_offset + i - 1));
+                                 prev_x :
+                                 x.block(block_offset + i - 1));
             }
           ++i;
         }
@@ -503,7 +531,7 @@ test(dealii::ConditionalOStream &pcout,
     table.add_value("L2-L2", std::sqrt(l2));
     table.add_value("L2-H1_semi", std::sqrt(h1_semi));
   };
-  for (int j = 0; j < 3; ++j)
+  for (int j = 1; j < 4; ++j)
     {
       for (int i = 2; i < 6; ++i)
         convergence_test(i,
@@ -547,7 +575,7 @@ main(int argc, char **argv)
   dealii::deallog.depth_console(0);
   MPI_Comm  comm = MPI_COMM_WORLD;
   const int dim  = 2;
-// #define PRECONDITIONER_FLOAT
+#define PRECONDITIONER_FLOAT
 #ifdef PRECONDITIONER_FLOAT
 #  define test test<dim, double, float>
 #else

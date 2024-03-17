@@ -124,8 +124,8 @@ public:
         unsigned int       n_timesteps_at_once,
         const std::vector<std::shared_ptr<const Utilities::MPI::Partitioner>>
                                       &partitioners_,
-        const bool                     restrict_is_transpose_prolongate = false,
-        const std::vector<TimeMGType> &mg_type_level                    = {})
+        const bool                     restrict_is_transpose_prolongate,
+        const std::vector<TimeMGType> &mg_type_level)
   {
     partitioners                = partitioners_;
     unsigned int const n_levels = partitioners.size();
@@ -139,13 +139,13 @@ public:
         ++n_k_levels;
       else if (el == TimeMGType::tau)
         ++n_tau_levels;
-    AssertDimension(n_levels, mg_type_level.size());
+    AssertDimension(n_levels - 1, mg_type_level.size());
     Assert((type == TimeStepType::DG ? r + 1 : r >= n_k_levels),
            ExcLowerRange(r, n_k_levels));
     auto         p_matrix = prolongation_matrices.rbegin();
     auto         r_matrix = restriction_matrices.rbegin();
-    unsigned int i        = n_levels - 1;
-    for (auto mgt = mg_type_level.rbegin(); mgt != mg_type_level.rend() - 1;
+    unsigned int i        = mg_type_level.size() - 1;
+    for (auto mgt = mg_type_level.rbegin(); mgt != mg_type_level.rend();
          ++mgt, --i, ++p_matrix, ++r_matrix)
       {
         bool k_mg = mg_type_level[i] == TimeMGType::k;
@@ -442,7 +442,8 @@ test(dealii::ConditionalOStream &pcout,
     auto [Alpha, Beta, Gamma, Zeta] = get_fe_time_weights<Number>(
       type, fe_degree, time_step_size, n_timesteps_at_once);
     std::vector<TimeMGType> mg_type_level =
-      get_time_mg_sequence(fe_degree,
+      get_time_mg_sequence(1,
+                           fe_degree,
                            type == TimeStepType::DG ? 0 : 1,
                            n_timesteps_at_once,
                            1,
@@ -469,7 +470,7 @@ test(dealii::ConditionalOStream &pcout,
     /// TimeGMG
     RepartitioningPolicyTools::DefaultPolicy<dim>          policy(true);
     std::vector<std::shared_ptr<const Triangulation<dim>>> mg_triangulations(
-      mg_type_level.size(), tria);
+      mg_type_level.size() + 1, tria);
     const unsigned int min_level = 0;
     const unsigned int max_level = mg_triangulations.size() - 1;
     pcout << ":: Min Level " << min_level << "  Max Level " << max_level

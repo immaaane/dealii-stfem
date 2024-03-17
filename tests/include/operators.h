@@ -18,6 +18,7 @@ namespace dealii
                     int                       block_offset = 0)
   {
     const unsigned int n_blocks = A.m();
+    AssertDimension(A.n(), 1);
     for (unsigned int i = 0; i < n_blocks; ++i)
       if (A(i, 0) != 0.0)
         c.block(block_offset + i).add(A(i, 0), b);
@@ -30,8 +31,7 @@ namespace dealii
     const unsigned int   n_blocks = A.m();
     BlockVectorT<Number> c(n_blocks);
     for (unsigned int i = 0; i < n_blocks; ++i)
-      c.block(i) = b;
-    c = 0.0;
+      c.block(i).reinit(b);
     tensorproduct_add(c, A, b);
     return c;
   }
@@ -43,8 +43,9 @@ namespace dealii
                     BlockVectorT<Number> const &b,
                     int                         block_offset = 0)
   {
-    const unsigned int n_blocks = A.m();
-    for (unsigned int i = 0; i < n_blocks; ++i)
+    const unsigned int n_blocks = A.n();
+    const unsigned int m_blocks = A.m();
+    for (unsigned int i = 0; i < m_blocks; ++i)
       for (unsigned int j = 0; j < n_blocks; ++j)
         if (A(i, j) != 0.0)
           c.block(block_offset + i).add(A(i, j), b.block(block_offset + j));
@@ -54,14 +55,15 @@ namespace dealii
   BlockVectorT<Number>
   operator*(const FullMatrix<Number> &A, BlockVectorT<Number> const &b)
   {
-    BlockVectorT<Number> c = b;
-    c                      = 0.0;
+    BlockVectorT<Number> c(b.n_blocks());
+    for (unsigned int i = 0; i < b.n_blocks(); ++i)
+      c.block(i).reinit(b);
     tensorproduct_add(c, A, b);
     return c;
   }
 
   template <typename Number, typename SystemMatrixType>
-  class SystemMatrix : public Subscriptor
+  class SystemMatrix final : public Subscriptor
   {
   public:
     using BlockVectorType = BlockVectorT<Number>;
