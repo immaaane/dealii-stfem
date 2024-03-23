@@ -1,4 +1,5 @@
 #pragma once
+#include <deal.II/base/parameter_handler.h>
 
 #include <deal.II/dofs/dof_handler.h>
 #include <deal.II/dofs/dof_tools.h>
@@ -543,16 +544,82 @@ namespace dealii
 
     bool estimate_relaxation = true;
 
-    unsigned int coarse_grid_smoother_sweeps = 1;
-    unsigned int coarse_grid_n_cycles        = 1;
-    std::string  coarse_grid_smoother_type   = "Smoother";
+    std::string coarse_grid_smoother_type = "Smoother";
 
-    unsigned int coarse_grid_maxiter = 1000;
+    unsigned int coarse_grid_maxiter = 10;
     double       coarse_grid_abstol  = 1e-20;
     double       coarse_grid_reltol  = 1e-4;
 
-    const bool restrict_is_transpose_prolongate = true;
+    bool restrict_is_transpose_prolongate = true;
+    bool variable                         = true;
   };
+  struct Parameters
+  {
+    bool         do_output               = false;
+    bool         print_timing            = false;
+    bool         space_time_mg           = true;
+    bool         time_before_space       = false;
+    TimeStepType type                    = TimeStepType::CGP;
+    ProblemType  problem                 = ProblemType::wave;
+    unsigned int n_timesteps_at_once     = 1;
+    int          n_timesteps_at_once_min = -1;
+    unsigned int fe_degree               = 1;
+    int          fe_degree_min           = -1;
+    unsigned int n_deg_cycles            = 1;
+    unsigned int n_ref_cycles            = 1;
+    double       frequency               = 1.0;
+    int          refinement              = 2;
+
+    PreconditionerGMGAdditionalData mg_data;
+    void
+    parse(const std::string file_name)
+    {
+      std::string              type_, problem_;
+      dealii::ParameterHandler prm;
+      prm.add_parameter("DoOutput", do_output);
+      prm.add_parameter("PrintTiming", print_timing);
+      prm.add_parameter("SpaceTimeMG", space_time_mg);
+      prm.add_parameter("MGTimeBeforeSpace", time_before_space);
+      prm.add_parameter("TimeType", type_);
+      prm.add_parameter("ProblemType", problem_);
+      prm.add_parameter("nTimestepsAtOnce", n_timesteps_at_once);
+      prm.add_parameter("nTimestepsAtOnceMin", n_timesteps_at_once_min);
+      prm.add_parameter("FeDegree", fe_degree);
+      prm.add_parameter("FeDegreeMin", fe_degree_min);
+      prm.add_parameter("nDegCycles", n_deg_cycles);
+      prm.add_parameter("nRefCycles", n_ref_cycles);
+      prm.add_parameter("frequency", frequency);
+      prm.add_parameter("refinement", refinement);
+      prm.add_parameter("smoothingDegree", mg_data.smoothing_degree);
+      prm.add_parameter("estimateRelaxation", mg_data.estimate_relaxation);
+      prm.add_parameter("coarseGridSmootherType",
+                        mg_data.coarse_grid_smoother_type);
+      prm.add_parameter("coarseGridMaxiter", mg_data.coarse_grid_maxiter);
+      prm.add_parameter("coarseGridAbstol", mg_data.coarse_grid_abstol);
+      prm.add_parameter("coarseGridReltol", mg_data.coarse_grid_reltol);
+      prm.add_parameter("restrictIsTransposeProlongate",
+                        mg_data.restrict_is_transpose_prolongate);
+      prm.add_parameter("variable", mg_data.variable);
+      std::ifstream file;
+      file.open(file_name);
+      prm.parse_input_from_json(file, true);
+      type    = str_to_time_type.at(type_);
+      problem = str_to_problem_type.at(problem_);
+      if (n_timesteps_at_once_min == -1)
+        n_timesteps_at_once_min = n_timesteps_at_once / 2;
+
+      n_timesteps_at_once_min =
+        std::clamp(n_timesteps_at_once_min,
+                   1,
+                   static_cast<int>(n_timesteps_at_once));
+      const int lowest_degree = type == TimeStepType::DG ? 0 : 1;
+      if (fe_degree_min = -1)
+        fe_degree_min = fe_degree - 1;
+      fe_degree_min =
+        std::clamp(fe_degree_min, lowest_degree, static_cast<int>(fe_degree));
+    }
+  };
+
   template <int dim, typename Number, typename LevelMatrixType>
   class GMG
   {
@@ -570,7 +637,7 @@ namespace dealii
   public:
     GMG(
       TimerOutput                   &timer,
-      TimeStepType const             type,
+      Parameters const              &parameters,
       unsigned int const             r,
       unsigned int const             n_timesteps_at_once,
       const std::vector<TimeMGType> &mg_type_level,
@@ -585,6 +652,7 @@ namespace dealii
       std::unique_ptr<BlockVectorType> &&tmp1,
       std::unique_ptr<BlockVectorType> &&tmp2)
       : timer(timer)
+      , additional_data(parameters.mg_data)
       , src_(std::move(tmp1))
       , dst_(std::move(tmp2))
       , dof_handler(dof_handler)
@@ -595,9 +663,8 @@ namespace dealii
       , min_level(mg_dof_handlers.min_level())
       , max_level(mg_dof_handlers.max_level())
     {
-      PreconditionerGMGAdditionalData additional_data;
       transfer_block = build_stmg_transfers<dim, Number>(
-        type,
+        parameters.type,
         r,
         n_timesteps_at_once,
         mg_dof_handlers,
@@ -612,8 +679,6 @@ namespace dealii
     void
     reinit() const
     {
-      PreconditionerGMGAdditionalData additional_data;
-
       // wrap level operators
       mg_matrix = mg::Matrix<BlockVectorType>(mg_operators);
 
@@ -629,13 +694,20 @@ namespace dealii
             additional_data.estimate_relaxation ? estimate_relaxation(level) :
                                                   1.0;
         }
-      mg_smoother = std::make_unique<MGSmootherType>(1, true, false, false);
+      mg_smoother = std::make_unique<MGSmootherType>(1,
+                                                     additional_data.variable,
+                                                     false,
+                                                     false);
       mg_smoother->initialize(mg_operators, smoother_data);
 
       if (additional_data.coarse_grid_smoother_type != "Smoother")
         {
-          solver_control_coarse =
-            std::make_unique<ReductionControl>(10, 1.e-12, 1.e-4, false, false);
+          solver_control_coarse = std::make_unique<ReductionControl>(
+            additional_data.coarse_grid_maxiter,
+            additional_data.coarse_grid_abstol,
+            additional_data.coarse_grid_reltol,
+            false,
+            false);
           typename SolverGMRES<BlockVectorType>::AdditionalData const
             gmres_additional_data(10);
           gmres_coarse = std::make_unique<SolverGMRES<BlockVectorType>>(
@@ -766,6 +838,8 @@ namespace dealii
 
   private:
     TimerOutput &timer;
+
+    PreconditionerGMGAdditionalData additional_data;
 
     std::unique_ptr<BlockVectorType> src_;
     std::unique_ptr<BlockVectorType> dst_;

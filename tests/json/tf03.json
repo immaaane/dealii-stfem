@@ -1,0 +1,14 @@
+{
+    "DoOutput"               : "false",
+    "PrintTiming"            : "false",
+    "SpaceTimeMG"            : "true",
+    "MGTimeBeforeSpace"      : "false",
+    "TimeType"               : "DG",
+    "ProblemType"            : "heat",
+    "nTimestepsAtOnce"       : "1",
+    "FeDegree"               : "1",
+    "nDegCycles"             : "3",
+    "nRefCycles"             : "4",
+    "frequency"              : "1.0",
+    "refinement"             : "2"
+}

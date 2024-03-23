@@ -249,6 +249,44 @@ namespace dealii
     bool beta_is_zero;
   };
 
+  template <int dim>
+  class Coefficient final : public Function<dim>
+  {
+    double c1, c2, c3;
+
+  public:
+    Coefficient(double c1_ = 1.0, double c2_ = 9.0, double c3_ = 16.0)
+      : c1(c1_)
+      , c2(c2_)
+      , c3(c3_)
+    {}
+
+    virtual double
+    value(const Point<dim> &p, const unsigned int /*component*/) const override
+    {
+      if (p[1] < 0.2)
+        return c1;
+
+      return p[0] < 0.2 ? c2 : c3;
+    }
+
+    template <typename number>
+    number
+    value(const Point<dim, number> &p) const
+    {
+      number value(c1);
+      auto   v = value.begin();
+      for (auto px = p[0].begin(), py = p[1].begin(); px != p[0].end();
+           ++px, ++py, ++v)
+        if (*py >= 0.2)
+          if (*px < 0.2)
+            *v = c2;
+          else
+            *v = c3;
+      return value;
+    }
+  };
+
   template <int dim, typename Number>
   class MatrixFreeOperator
   {
@@ -264,9 +302,14 @@ namespace dealii
                        const double                     laplace_matrix_scaling)
       : mass_matrix_scaling(mass_matrix_scaling)
       , laplace_matrix_scaling(laplace_matrix_scaling)
+      , has_mass_coefficient(false)
+      , has_laplace_coefficient(false)
     {
+      mass_matrix_coefficient.clear();
+      laplace_matrix_coefficient.clear();
       typename MatrixFree<dim, Number>::AdditionalData additional_data;
-      additional_data.mapping_update_flags = update_values | update_gradients;
+      additional_data.mapping_update_flags =
+        update_values | update_gradients | update_quadrature_points;
 
       matrix_free.reinit(
         mapping, dof_handler, constraints, quadrature, additional_data);
@@ -324,6 +367,35 @@ namespace dealii
       return 0.0;
     }
 
+    void
+    evaluate_coefficient(const Coefficient<dim> &coefficient_fun)
+    {
+      FECellIntegrator   integrator(matrix_free);
+      const unsigned int n_cells = matrix_free.n_cell_batches();
+      if (mass_matrix_scaling != 0.0)
+        mass_matrix_coefficient.reinit(n_cells, integrator.n_q_points);
+      if (laplace_matrix_scaling != 0.0)
+        laplace_matrix_coefficient.reinit(n_cells, integrator.n_q_points);
+
+      for (unsigned int cell = 0; cell < n_cells; ++cell)
+        {
+          integrator.reinit(cell);
+          for (const unsigned int q : integrator.quadrature_point_indices())
+            {
+              if (mass_matrix_scaling != 0.0)
+                mass_matrix_coefficient(cell, q) =
+                  coefficient_fun.value(integrator.quadrature_point(q));
+              if (laplace_matrix_scaling != 0.0)
+                laplace_matrix_coefficient(cell, q) =
+                  coefficient_fun.value(integrator.quadrature_point(q));
+            }
+        }
+      if (!mass_matrix_coefficient.empty())
+        has_mass_coefficient = true;
+      if (!laplace_matrix_coefficient.empty())
+        has_laplace_coefficient = true;
+    }
+
   private:
     using FECellIntegrator = FEEvaluation<dim, -1, 0, 1, Number>;
 
@@ -373,6 +445,7 @@ namespace dealii
     void
     do_cell_integral_local(FECellIntegrator &integrator) const
     {
+      unsigned int const cell = integrator.get_current_cell_index();
       // evaluate
       if (mass_matrix_scaling != 0.0 && laplace_matrix_scaling != 0.0)
         integrator.evaluate(EvaluationFlags::values |
@@ -386,11 +459,15 @@ namespace dealii
       for (unsigned int q = 0; q < integrator.n_q_points; ++q)
         {
           if (mass_matrix_scaling != 0.0)
-            integrator.submit_value(mass_matrix_scaling *
+            integrator.submit_value((has_mass_coefficient ?
+                                       mass_matrix_coefficient(cell, q) :
+                                       mass_matrix_scaling) *
                                       integrator.get_value(q),
                                     q);
           if (laplace_matrix_scaling != 0.0)
-            integrator.submit_gradient(laplace_matrix_scaling *
+            integrator.submit_gradient((has_laplace_coefficient ?
+                                          laplace_matrix_coefficient(cell, q) :
+                                          laplace_matrix_scaling) *
                                          integrator.get_gradient(q),
                                        q);
         }
@@ -410,7 +487,12 @@ namespace dealii
 
     MatrixFree<dim, Number> matrix_free;
 
-    double mass_matrix_scaling;
-    double laplace_matrix_scaling;
+    Number mass_matrix_scaling;
+    Number laplace_matrix_scaling;
+
+    bool                              has_mass_coefficient    = false;
+    bool                              has_laplace_coefficient = false;
+    Table<2, VectorizedArray<Number>> mass_matrix_coefficient;
+    Table<2, VectorizedArray<Number>> laplace_matrix_coefficient;
   };
 } // namespace dealii

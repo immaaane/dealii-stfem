@@ -381,7 +381,7 @@ test(dealii::ConditionalOStream &pcout,
     const unsigned int n_blocks =
       (type == TimeStepType::DG ? fe_degree + 1 : fe_degree) *
       n_timesteps_at_once;
-    auto const  basis = get_time_basis<Number>(type, fe_degree);
+    auto const  basis = get_time_basis(type, fe_degree);
     FE_Q<dim>   fe(fe_degree + 1);
     QGauss<dim> quad(fe.tensor_degree() + 1);
 
