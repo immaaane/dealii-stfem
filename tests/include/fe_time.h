@@ -15,6 +15,10 @@ enum class TimeStepType : unsigned int
   DG  = 2,
   GCC = 3
 };
+static std::unordered_map<std::string, TimeStepType> const str_to_time_type = {
+  {"CGP", TimeStepType::CGP},
+  {"DG", TimeStepType::DG},
+  {"GCC", TimeStepType::GCC}};
 
 enum class TimeMGType : unsigned int
 {

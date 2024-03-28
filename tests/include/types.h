@@ -11,3 +11,11 @@ template <typename Number>
 using BlockVectorT = dealii::LinearAlgebra::distributed::BlockVector<Number>;
 using SparseMatrixType    = dealii::TrilinosWrappers::SparseMatrix;
 using SparsityPatternType = dealii::TrilinosWrappers::SparsityPattern;
+
+enum class ProblemType : unsigned int
+{
+  heat = 1,
+  wave = 2,
+};
+static std::unordered_map<std::string, ProblemType> const str_to_problem_type =
+  {{"heat", ProblemType::heat}, {"wave", ProblemType::wave}};

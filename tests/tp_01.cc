@@ -22,12 +22,6 @@
 using namespace dealii;
 using dealii::numbers::PI;
 
-enum class ProblemType : unsigned int
-{
-  heat = 1,
-  wave = 2,
-};
-
 template <typename Number_dst, typename Number_src>
 FullMatrix<Number_dst>
 convert_to(FullMatrix<Number_src> const &in)
@@ -41,26 +35,32 @@ template <int dim, typename Number, typename NumberPreconditioner = Number>
 void
 test(dealii::ConditionalOStream &pcout,
      MPI_Comm const              comm_global,
-     TimeStepType const          type,
-     ProblemType const           problem,
-     unsigned int                n_timesteps_at_once = 1)
+     std::string                 file_name)
 {
+  Parameters parameters;
+  parameters.parse(file_name);
+  Assert(parameters.fe_degree >= (parameters.type == TimeStepType::DG ? 0 : 1),
+         ExcLowerRange(parameters.fe_degree,
+                       (parameters.type == TimeStepType::DG ? 0 : 1)));
+  Assert(parameters.refinement >= 1, ExcLowerRange(parameters.refinement, 1));
   ConvergenceTable table;
   MappingQ1<dim>   mapping;
 
-  const bool print_timing      = false;
-  const bool space_time_mg     = true;
-  const bool time_before_space = false;
-  auto       convergence_test  = [&](int const          refinement,
-                              unsigned int const fe_degree,
-                              bool               do_output,
-                              unsigned int       n_timesteps_at_once) {
+  const bool print_timing      = parameters.print_timing;
+  const bool space_time_mg     = parameters.space_time_mg;
+  const bool time_before_space = parameters.time_before_space;
+  auto       convergence_test  = [&](int const         refinement,
+                              int const         fe_degree,
+                              Parameters const &parameters) {
+    bool const         do_output = parameters.do_output;
+    unsigned int const n_timesteps_at_once = parameters.n_timesteps_at_once;
+
     using VectorType      = VectorT<Number>;
     using BlockVectorType = BlockVectorT<Number>;
     const unsigned int n_blocks =
-      (type == TimeStepType::DG ? fe_degree + 1 : fe_degree) *
+      (parameters.type == TimeStepType::DG ? fe_degree + 1 : fe_degree) *
       n_timesteps_at_once;
-    auto const  basis = get_time_basis(type, fe_degree);
+    auto const  basis = get_time_basis(parameters.type, fe_degree);
     FE_Q<dim>   fe(fe_degree + 1);
     QGauss<dim> quad(fe.tensor_degree() + 1);
 
@@ -80,8 +80,8 @@ test(dealii::ConditionalOStream &pcout,
     DoFTools::make_zero_boundary_constraints(dof_handler, constraints);
     constraints.close();
     pcout << ":: Number of active cells: " << tria.n_active_cells() << "\n"
-          << ":: Number of degrees of freedom: " << dof_handler.n_dofs() << "\n"
-          << std::endl;
+          << ":: Number of degrees of freedom: " << dof_handler.n_dofs()
+          << "\n";
 
     // create sparsity pattern
     SparsityPatternType sparsity_pattern(dof_handler.locally_owned_dofs(),
@@ -102,9 +102,9 @@ test(dealii::ConditionalOStream &pcout,
     M.reinit(sparsity_pattern);
 
     double time           = 0.;
-    double time_step_size = 1.0 * pow(2.0, -(refinement + 1));
     double end_time       = 1.;
-    Number frequency      = 1.0;
+    double time_step_size = end_time * pow(2.0, -(refinement + 1));
+    Number frequency      = parameters.frequency;
 
     // matrix-free operators
     MatrixFreeOperator<dim, Number> K_mf(
@@ -127,10 +127,10 @@ test(dealii::ConditionalOStream &pcout,
 
     // We need the case n_timesteps_at_once=1 matrices always for the
     // integration of the source f
-    auto [Alpha_1, Beta_1, Gamma_1, Zeta_1] =
-      get_fe_time_weights<Number>(type, fe_degree, time_step_size, 1);
+    auto [Alpha_1, Beta_1, Gamma_1, Zeta_1] = get_fe_time_weights<Number>(
+      parameters.type, fe_degree, time_step_size, 1);
     auto [Alpha, Beta, Gamma, Zeta] = get_fe_time_weights<Number>(
-      type, fe_degree, time_step_size, n_timesteps_at_once);
+      parameters.type, fe_degree, time_step_size, n_timesteps_at_once);
 
     TimerOutput timer(pcout,
                       TimerOutput::never,
@@ -140,11 +140,15 @@ test(dealii::ConditionalOStream &pcout,
       zero(Gamma.m(), Gamma.n());
     std::unique_ptr<SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>
       rhs_matrix, rhs_matrix_v, matrix;
-    if (problem == ProblemType::wave)
+    if (parameters.problem == ProblemType::wave)
       {
         auto [Alpha_lhs, Beta_lhs, rhs_uK_, rhs_uM_, rhs_vM_] =
-          get_fe_time_weights_wave(
-            type, Alpha_1, Beta_1, Gamma_1, Zeta_1, n_timesteps_at_once);
+          get_fe_time_weights_wave(parameters.type,
+                                   Alpha_1,
+                                   Beta_1,
+                                   Gamma_1,
+                                   Zeta_1,
+                                   n_timesteps_at_once);
 
         lhs_uK       = Alpha_lhs;
         lhs_uM       = Beta_lhs;
@@ -159,8 +163,8 @@ test(dealii::ConditionalOStream &pcout,
       {
         lhs_uK = Alpha;
         lhs_uM = Beta;
-        rhs_uK = (type == TimeStepType::CGP) ? Gamma : zero;
-        rhs_uM = (type == TimeStepType::CGP) ? Zeta : Gamma;
+        rhs_uK = (parameters.type == TimeStepType::CGP) ? Gamma : zero;
+        rhs_uM = (parameters.type == TimeStepType::CGP) ? Zeta : Gamma;
       }
     matrix =
       std::make_unique<SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
@@ -174,13 +178,11 @@ test(dealii::ConditionalOStream &pcout,
     std::vector<std::shared_ptr<const Triangulation<dim>>> mg_triangulations =
       MGTransferGlobalCoarseningTools::create_geometric_coarsening_sequence(
         tria, policy);
-    const int    lowest_degree = type == TimeStepType::DG ? 0u : 1u;
-    unsigned int fe_degree_mg =
-      std::max(static_cast<int>(fe_degree) - 1, lowest_degree);
-    unsigned int fe_degree_min = space_time_mg ? fe_degree_mg : fe_degree;
-    unsigned int n_timesteps_min = space_time_mg ?
-                                            std::max(n_timesteps_at_once / 2, 1u) :
-                                            n_timesteps_at_once;
+    unsigned int fe_degree_min =
+      space_time_mg ? parameters.fe_degree_min : fe_degree;
+    unsigned int n_timesteps_min =
+      space_time_mg ? std::max(parameters.n_timesteps_at_once_min, 1) :
+                             n_timesteps_at_once;
     std::vector<TimeMGType> mg_type_level =
       get_time_mg_sequence(mg_triangulations.size(),
                            fe_degree,
@@ -196,7 +198,7 @@ test(dealii::ConditionalOStream &pcout,
     const unsigned int min_level = 0;
     const unsigned int max_level = mg_triangulations.size() - 1;
     pcout << ":: Min Level " << min_level << "  Max Level " << max_level
-          << std::endl;
+          << "\n";
     MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers(
       min_level, max_level);
     MGLevelObject<std::shared_ptr<const SparsityPatternType>>
@@ -222,12 +224,20 @@ test(dealii::ConditionalOStream &pcout,
       precondition_vanka(min_level, max_level);
     std::vector<std::array<FullMatrix<NumberPreconditioner>, 4>> fetw;
     std::vector<std::array<FullMatrix<NumberPreconditioner>, 5>> fetw_w;
-    if (problem == ProblemType::heat)
-      fetw = get_fe_time_weights<Number, NumberPreconditioner>(
-        type, fe_degree, time_step_size, n_timesteps_at_once, mg_type_level);
-    else if (problem == ProblemType::wave)
+    if (parameters.problem == ProblemType::heat)
+      fetw =
+        get_fe_time_weights<Number, NumberPreconditioner>(parameters.type,
+                                                          fe_degree,
+                                                          time_step_size,
+                                                          n_timesteps_at_once,
+                                                          mg_type_level);
+    else if (parameters.problem == ProblemType::wave)
       fetw_w = get_fe_time_weights_wave<Number, NumberPreconditioner>(
-        type, fe_degree, time_step_size, n_timesteps_at_once, mg_type_level);
+        parameters.type,
+        fe_degree,
+        time_step_size,
+        n_timesteps_at_once,
+        mg_type_level);
 
     for (unsigned int l = min_level; l <= max_level; ++l)
       {
@@ -255,9 +265,9 @@ test(dealii::ConditionalOStream &pcout,
             mapping, *dof_handler_, *constraints_, quad, 1.0, 0.0);
 
         auto const &lhs_uK_p =
-          problem == ProblemType::heat ? fetw[l][0] : fetw_w[l][0];
+          parameters.problem == ProblemType::heat ? fetw[l][0] : fetw_w[l][0];
         auto const &lhs_uM_p =
-          problem == ProblemType::heat ? fetw[l][1] : fetw_w[l][1];
+          parameters.problem == ProblemType::heat ? fetw[l][1] : fetw_w[l][1];
 
         mg_operators[l] = std::make_shared<
           SystemMatrix<NumberPreconditioner,
@@ -318,7 +328,7 @@ test(dealii::ConditionalOStream &pcout,
           SystemMatrix<NumberPreconditioner,
                        MatrixFreeOperator<dim, NumberPreconditioner>>>;
     auto preconditioner = std::make_unique<Preconditioner>(timer,
-                                                           type,
+                                                           parameters,
                                                            fe_degree,
                                                            n_timesteps_at_once,
                                                            mg_type_level,
@@ -332,13 +342,11 @@ test(dealii::ConditionalOStream &pcout,
     preconditioner->reinit();
     //
     /// GMG
-
-    // Number                      frequency = 1.0;
     std::unique_ptr<Function<dim, Number>> rhs_function;
     std::unique_ptr<Function<dim, Number>>
       exact_solution = std::make_unique<ExactSolution<dim, Number>>(frequency),
       exact_solution_v;
-    if (problem == ProblemType::wave)
+    if (parameters.problem == ProblemType::wave)
       {
         rhs_function =
           std::make_unique<wave::RHSFunction<dim, Number>>(frequency);
@@ -370,18 +378,18 @@ test(dealii::ConditionalOStream &pcout,
       VectorTools::interpolate(mapping, dof_handler, *exact_solution_v, tmp);
     };
     auto evaluate_numerical_solution =
-      [&constraints, &basis, &type](const double           time,
-                                    VectorType            &tmp,
-                                    BlockVectorType const &x,
-                                    VectorType const      &prev_x,
-                                    unsigned block_offset = 0) -> void {
+      [&constraints, &basis, &parameters](const double           time,
+                                          VectorType            &tmp,
+                                          BlockVectorType const &x,
+                                          VectorType const      &prev_x,
+                                          unsigned block_offset = 0) -> void {
       int i = 0;
       tmp   = 0.0;
       for (auto const &el : basis)
         {
           if (double v = el.value(time); v != 0.0)
             {
-              if (type == TimeStepType::DG)
+              if (parameters.type == TimeStepType::DG)
                 tmp.add(v, x.block(block_offset + i));
               else
                 tmp.add(v,
@@ -399,7 +407,7 @@ test(dealii::ConditionalOStream &pcout,
       matrix->initialize_dof_vector(x.block(i));
     VectorType prev_x, prev_v;
     matrix->initialize_dof_vector(prev_x);
-    if (problem == ProblemType::wave)
+    if (parameters.problem == ProblemType::wave)
       {
         matrix->initialize_dof_vector(prev_v);
         for (unsigned int i = 0; i < n_blocks; ++i)
@@ -412,7 +420,7 @@ test(dealii::ConditionalOStream &pcout,
     matrix->initialize_dof_vector(numeric);
 
     unsigned int                 timestep_number = 0;
-    ErrorCalculator<dim, Number> error_calculator(type,
+    ErrorCalculator<dim, Number> error_calculator(parameters.type,
                                                   fe_degree,
                                                   fe_degree,
                                                   mapping,
@@ -421,9 +429,9 @@ test(dealii::ConditionalOStream &pcout,
                                                   evaluate_numerical_solution);
 
     std::unique_ptr<TimeIntegrator<dim, Number, Preconditioner>> step;
-    if (problem == ProblemType::heat)
+    if (parameters.problem == ProblemType::heat)
       step = std::make_unique<TimeIntegratorHeat<dim, Number, Preconditioner>>(
-        type,
+        parameters.type,
         fe_degree,
         Alpha_1,
         Gamma_1,
@@ -435,7 +443,7 @@ test(dealii::ConditionalOStream &pcout,
         n_timesteps_at_once);
     else
       step = std::make_unique<TimeIntegratorWave<dim, Number, Preconditioner>>(
-        type,
+        parameters.type,
         fe_degree,
         Alpha_1,
         Beta_1,
@@ -452,10 +460,10 @@ test(dealii::ConditionalOStream &pcout,
     // interpolate initial value
     auto nt_dofs = static_cast<unsigned int>(n_blocks / n_timesteps_at_once);
     evaluate_exact_solution(0, x.block(x.n_blocks() - 1));
-    if (problem == ProblemType::wave)
+    if (parameters.problem == ProblemType::wave)
       evaluate_exact_v_solution(0, v.block(v.n_blocks() - 1));
     double l2 = 0., l8 = -1., h1_semi = 0.;
-    int    i = 0;
+    int    i = 0, total_gmres_iterations = 0;
     while (time < end_time)
       {
         TimerOutput::Scope scope(timer, "step");
@@ -464,7 +472,7 @@ test(dealii::ConditionalOStream &pcout,
         dealii::deallog << "Step " << timestep_number << " t = " << time
                         << std::endl;
         prev_x = x.block(x.n_blocks() - 1);
-        if (problem == ProblemType::heat)
+        if (parameters.problem == ProblemType::heat)
           static_cast<TimeIntegratorHeat<dim, Number, Preconditioner> const *>(
             step.get())
             ->solve(x, prev_x, timestep_number, time, time_step_size);
@@ -477,6 +485,7 @@ test(dealii::ConditionalOStream &pcout,
               ->solve(
                 x, v, prev_x, prev_v, timestep_number, time, time_step_size);
           }
+        total_gmres_iterations += step->last_step();
         for (unsigned int i = 0; i < n_blocks; ++i)
           constraints.distribute(x.block(i));
         auto error_on_In = error_calculator.evaluate_error(
@@ -517,7 +526,11 @@ test(dealii::ConditionalOStream &pcout,
           }
 #endif
       }
-
+    double average_gmres_iter = static_cast<double>(total_gmres_iterations) /
+                                static_cast<double>(timestep_number);
+    pcout << "Average GMRES iterations: " << average_gmres_iter << " (over "
+          << timestep_number << " timesteps)\n"
+          << std::endl;
     if (print_timing)
       timer.print_wall_time_statistics(MPI_COMM_WORLD);
 
@@ -531,13 +544,14 @@ test(dealii::ConditionalOStream &pcout,
     table.add_value("L2-L2", std::sqrt(l2));
     table.add_value("L2-H1_semi", std::sqrt(h1_semi));
   };
-  for (int j = 1; j < 4; ++j)
+  for (unsigned int j = parameters.fe_degree;
+       j < parameters.fe_degree + parameters.n_deg_cycles;
+       ++j)
     {
-      for (int i = 2; i < 6; ++i)
-        convergence_test(i,
-                         type == TimeStepType::DG ? j : j + 1,
-                         false,
-                         n_timesteps_at_once);
+      for (unsigned int i = parameters.refinement;
+           i < parameters.refinement + parameters.n_ref_cycles;
+           ++i)
+        convergence_test(i, j, parameters);
 
       table.set_precision("L\u221E-L\u221E", 5);
       table.set_precision("L2-L2", 5);
@@ -582,20 +596,20 @@ main(int argc, char **argv)
 #  define test test<dim, double, double>
 #endif
   dealii::deallog << "HEAT 2 steps at once" << std::endl;
-  test(pcout, comm, TimeStepType::DG, ProblemType::heat, 2);
-  test(pcout, comm, TimeStepType::CGP, ProblemType::heat, 2);
+  test(pcout, comm, "tests/json/tf01.json");
+  test(pcout, comm, "tests/json/tf02.json");
 
   dealii::deallog << "HEAT single step" << std::endl;
-  test(pcout, comm, TimeStepType::DG, ProblemType::heat);
-  test(pcout, comm, TimeStepType::CGP, ProblemType::heat);
+  test(pcout, comm, "tests/json/tf03.json");
+  test(pcout, comm, "tests/json/tf04.json");
 
   dealii::deallog << "WAVE 4 steps at once" << std::endl;
-  test(pcout, comm, TimeStepType::DG, ProblemType::wave, 4);
-  test(pcout, comm, TimeStepType::CGP, ProblemType::wave, 4);
+  test(pcout, comm, "tests/json/tf05.json");
+  test(pcout, comm, "tests/json/tf06.json");
 
   dealii::deallog << "WAVE single step" << std::endl;
-  test(pcout, comm, TimeStepType::DG, ProblemType::wave);
-  test(pcout, comm, TimeStepType::CGP, ProblemType::wave);
+  test(pcout, comm, "tests/json/tf07.json");
+  test(pcout, comm, "tests/json/tf08.json");
 #undef test
 
   dealii::deallog << std::endl;
