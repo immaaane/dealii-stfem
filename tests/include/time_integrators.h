@@ -32,7 +32,8 @@ namespace dealii
       Preconditioner const &preconditioner_,
       SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix_,
       std::function<void(const double, VectorType &)> integrate_rhs_function,
-      unsigned int                                    n_timesteps_at_once_)
+      unsigned int                                    n_timesteps_at_once_,
+      bool                                            extrapolate_)
       : type(type_)
       , time_degree(time_degree_)
       , Alpha(Alpha_)
@@ -44,6 +45,7 @@ namespace dealii
       , rhs_matrix(rhs_matrix_)
       , integrate_rhs_function(integrate_rhs_function)
       , n_timesteps_at_once(n_timesteps_at_once_)
+      , do_extrapolate(extrapolate_)
     {
       if (type == TimeStepType::DG)
         quad_time =
@@ -88,6 +90,16 @@ namespace dealii
     }
 
   protected:
+    void
+    extrapolate(BlockVectorType &x, VectorType const &prev_x) const
+    {
+      for (unsigned int j = 0; j < x.n_blocks(); ++j)
+        if (do_extrapolate)
+          x.block(j) = prev_x;
+        else
+          x.block(j) = 0.0;
+    }
+
     TimeStepType              type;
     unsigned int              time_degree;
     Quadrature<1>             quad_time;
@@ -101,6 +113,7 @@ namespace dealii
     SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix;
     std::function<void(const double, VectorType &)> integrate_rhs_function;
     unsigned int                                    n_timesteps_at_once;
+    bool                                            do_extrapolate;
   };
 
 
@@ -123,7 +136,8 @@ namespace dealii
       Preconditioner const &preconditioner_,
       SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix_,
       std::function<void(const double, VectorType &)> integrate_rhs_function,
-      unsigned int                                    n_timesteps_at_once_)
+      unsigned int                                    n_timesteps_at_once_,
+      bool                                            extrapolate = true)
       : TimeIntegrator<dim, Number, Preconditioner>(type_,
                                                     time_degree_,
                                                     Alpha_,
@@ -133,7 +147,8 @@ namespace dealii
                                                     preconditioner_,
                                                     rhs_matrix_,
                                                     integrate_rhs_function,
-                                                    n_timesteps_at_once_)
+                                                    n_timesteps_at_once_,
+                                                    extrapolate)
     {}
 
     void
@@ -150,9 +165,7 @@ namespace dealii
 
       this->assemble_force(rhs, time, time_step);
 
-      // constant extrapolation of solution from last time
-      for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
-        x.block(j) = prev_x;
+      this->extrapolate(x, prev_x);
       try
         {
           this->solver.solve(this->matrix, x, rhs, this->preconditioner);
@@ -187,7 +200,8 @@ namespace dealii
       SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const
                                                      &rhs_matrix_v_,
       std::function<void(const double, VectorType &)> integrate_rhs_function,
-      unsigned int                                    n_timesteps_at_once_)
+      unsigned int                                    n_timesteps_at_once_,
+      bool                                            extrapolate = true)
       : TimeIntegrator<dim, Number, Preconditioner>(type_,
                                                     time_degree_,
                                                     Alpha_,
@@ -197,7 +211,8 @@ namespace dealii
                                                     preconditioner_,
                                                     rhs_matrix_,
                                                     integrate_rhs_function,
-                                                    n_timesteps_at_once_)
+                                                    n_timesteps_at_once_,
+                                                    extrapolate)
       , rhs_matrix_v(rhs_matrix_v_)
       , Beta(Beta_)
       , Zeta(Zeta_)
@@ -233,9 +248,7 @@ namespace dealii
       this->rhs_matrix_v.vmult_add(rhs, prev_v);
       this->assemble_force(rhs, time, time_step);
 
-      // constant extrapolation of solution from last time
-      for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
-        u.block(j) = prev_u;
+      this->extrapolate(u, prev_u);
       try
         {
           this->solver.solve(this->matrix, u, rhs, this->preconditioner);

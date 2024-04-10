@@ -1,0 +1,20 @@
+{
+    "DoOutput"               : "false",
+    "PrintTiming"            : "false",
+    "SpaceTimeMG"            : "true",
+    "MGTimeBeforeSpace"      : "false",
+    "TimeType"               : "CGP",
+    "ProblemType"            : "wave",
+    "nTimestepsAtOnce"       : "2",
+    "FeDegree"               : "2",
+    "nDegCycles"             : "3",
+    "nRefCycles"             : "4",
+    "frequency"              : "1.0",
+    "refinement"             : "2",
+    "Extrapolate"            : "false",
+    "SpaceTimeConvergenceTest" : "false",
+    "FunctionalFile"         : "practical_02.txt",
+    "HyperRectLowerLeft"     : "-1.0,-1.0,-1.0",
+    "HyperRectUpperRight"    : "1.0,1.0,1.0",
+    "SourcePoint"            : "0.0,0.0,0.0"
+}
