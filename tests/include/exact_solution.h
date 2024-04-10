@@ -59,8 +59,9 @@ public:
   double
   value(Point<dim> const &x, unsigned int const) const override final
   {
-    Number value = 8 * PI * PI * f * f * sin(2 * PI * f * this->get_time()) +
-                   2 * PI * f * cos(2 * PI * f * this->get_time());
+    Number value =
+      dim * 4 * PI * PI * f * f * sin(2 * PI * f * this->get_time()) +
+      2 * PI * f * cos(2 * PI * f * this->get_time());
     for (unsigned int i = 0; i < dim; ++i)
       value *= sin(2 * PI * f * x[i]);
     return value;

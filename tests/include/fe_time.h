@@ -242,9 +242,30 @@ namespace dealii
     return ret;
   }
 
+  template <typename Number>
+  FullMatrix<Number>
+  get_time_evaluation_matrix(
+    std::vector<Polynomials::Polynomial<double>> const &basis,
+    unsigned int                                        samples_per_interval)
+  {
+    double             sample_step = 1.0 / (samples_per_interval - 1);
+    FullMatrix<Number> time_evaluator(samples_per_interval, basis.size());
+    for (unsigned int s = 0; s < samples_per_interval; ++s)
+      {
+        double time_ = s * sample_step;
+        auto   te    = time_evaluator.begin(s);
+        for (auto const &el : basis)
+          {
+            *te = el.value(time_);
+            ++te;
+          }
+      }
+    return time_evaluator;
+  }
 
-  /** Generates the time integration weights for time continuous Galerkin-Petrov
-   * discretizations or time discontinuous Galerkin discretizations
+  /** Generates the time integration weights for time continuous
+   * Galerkin-Petrov discretizations or time discontinuous Galerkin
+   * discretizations
    *
    * For a given order r the method returns 4 matrices. In the continouus
    * Galerkin-Petrov (CG) case these are:

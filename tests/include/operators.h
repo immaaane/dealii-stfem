@@ -55,9 +55,9 @@ namespace dealii
   BlockVectorT<Number>
   operator*(const FullMatrix<Number> &A, BlockVectorT<Number> const &b)
   {
-    BlockVectorT<Number> c(b.n_blocks());
-    for (unsigned int i = 0; i < b.n_blocks(); ++i)
-      c.block(i).reinit(b);
+    BlockVectorT<Number> c(A.m());
+    for (unsigned int i = 0; i < A.m(); ++i)
+      c.block(i).reinit(b.block(i));
     tensorproduct_add(c, A, b);
     return c;
   }
@@ -279,10 +279,12 @@ namespace dealii
       for (auto px = p[0].begin(), py = p[1].begin(); px != p[0].end();
            ++px, ++py, ++v)
         if (*py >= 0.2)
-          if (*px < 0.2)
-            *v = c2;
-          else
-            *v = c3;
+          {
+            if (*px < 0.2)
+              *v = c2;
+            else
+              *v = c3;
+          }
       return value;
     }
   };

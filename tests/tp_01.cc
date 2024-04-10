@@ -1,5 +1,6 @@
 #include <deal.II/base/conditional_ostream.h>
 #include <deal.II/base/convergence_table.h>
+#include <deal.II/base/function_lib.h>
 #include <deal.II/base/quadrature_lib.h>
 #include <deal.II/base/timer.h>
 
@@ -7,6 +8,7 @@
 #include <deal.II/distributed/tria.h>
 
 #include <deal.II/grid/grid_generator.h>
+#include <deal.II/grid/grid_tools.h>
 
 #include <deal.II/lac/precondition.h>
 
@@ -15,6 +17,7 @@
 
 #include "include/exact_solution.h"
 #include "include/fe_time.h"
+#include "include/getopt++.h"
 #include "include/gmg.h"
 #include "include/operators.h"
 #include "include/time_integrators.h"
@@ -31,35 +34,41 @@ convert_to(FullMatrix<Number_src> const &in)
   return out;
 }
 
-template <int dim, typename Number, typename NumberPreconditioner = Number>
+template <typename Number, typename NumberPreconditioner = Number>
 void
 test(dealii::ConditionalOStream &pcout,
      MPI_Comm const              comm_global,
-     std::string                 file_name)
+     std::string                 file_name,
+     int                         dim)
 {
-  Parameters parameters;
-  parameters.parse(file_name);
-  Assert(parameters.fe_degree >= (parameters.type == TimeStepType::DG ? 0 : 1),
-         ExcLowerRange(parameters.fe_degree,
-                       (parameters.type == TimeStepType::DG ? 0 : 1)));
-  Assert(parameters.refinement >= 1, ExcLowerRange(parameters.refinement, 1));
+  std::variant<Parameters<2>, Parameters<3>> parameters;
+  if (dim == 2)
+    parameters = Parameters<2>();
+  else
+    parameters = Parameters<3>();
+  std::visit([&](auto &p) { p.parse(file_name); }, parameters);
   ConvergenceTable table;
-  MappingQ1<dim>   mapping;
 
-  const bool print_timing      = parameters.print_timing;
-  const bool space_time_mg     = parameters.space_time_mg;
-  const bool time_before_space = parameters.time_before_space;
-  auto       convergence_test  = [&](int const         refinement,
-                              int const         fe_degree,
-                              Parameters const &parameters) {
-    bool const         do_output = parameters.do_output;
+  auto convergence_test = [&]<int dim>(int const              refinement,
+                                       int const              fe_degree,
+                                       Parameters<dim> const &parameters) {
+    const bool print_timing      = parameters.print_timing;
+    const bool space_time_mg     = parameters.space_time_mg;
+    const bool time_before_space = parameters.time_before_space;
+    const bool is_cgp            = parameters.type == TimeStepType::CGP;
+    Assert(parameters.fe_degree >= (is_cgp ? 1 : 0),
+           ExcLowerRange(parameters.fe_degree, (is_cgp ? 1 : 0)));
+    Assert(parameters.refinement >= 1, ExcLowerRange(parameters.refinement, 1));
+
+    MappingQ1<dim>     mapping;
+    bool const         do_output           = parameters.do_output;
     unsigned int const n_timesteps_at_once = parameters.n_timesteps_at_once;
 
-    using VectorType      = VectorT<Number>;
-    using BlockVectorType = BlockVectorT<Number>;
-    const unsigned int n_blocks =
-      (parameters.type == TimeStepType::DG ? fe_degree + 1 : fe_degree) *
-      n_timesteps_at_once;
+    using VectorType            = VectorT<Number>;
+    using BlockVectorType       = BlockVectorT<Number>;
+    const unsigned int nt_dofs  = is_cgp ? fe_degree : fe_degree + 1;
+    const unsigned int n_blocks = nt_dofs * n_timesteps_at_once;
+
     auto const  basis = get_time_basis(parameters.type, fe_degree);
     FE_Q<dim>   fe(fe_degree + 1);
     QGauss<dim> quad(fe.tensor_degree() + 1);
@@ -67,7 +76,9 @@ test(dealii::ConditionalOStream &pcout,
     parallel::distributed::Triangulation<dim> tria(comm_global);
     DoFHandler<dim>                           dof_handler(tria);
 
-    GridGenerator::hyper_cube(tria);
+    GridGenerator::hyper_rectangle(tria,
+                                   parameters.hyperrect_lower_left,
+                                   parameters.hyperrect_upper_right);
     tria.refine_global(refinement);
 
     dof_handler.distribute_dofs(fe);
@@ -163,8 +174,8 @@ test(dealii::ConditionalOStream &pcout,
       {
         lhs_uK = Alpha;
         lhs_uM = Beta;
-        rhs_uK = (parameters.type == TimeStepType::CGP) ? Gamma : zero;
-        rhs_uM = (parameters.type == TimeStepType::CGP) ? Zeta : Gamma;
+        rhs_uK = is_cgp ? Gamma : zero;
+        rhs_uM = is_cgp ? Zeta : Gamma;
       }
     matrix =
       std::make_unique<SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
@@ -182,7 +193,7 @@ test(dealii::ConditionalOStream &pcout,
       space_time_mg ? parameters.fe_degree_min : fe_degree;
     unsigned int n_timesteps_min =
       space_time_mg ? std::max(parameters.n_timesteps_at_once_min, 1) :
-                             n_timesteps_at_once;
+                      n_timesteps_at_once;
     std::vector<TimeMGType> mg_type_level =
       get_time_mg_sequence(mg_triangulations.size(),
                            fe_degree,
@@ -342,60 +353,78 @@ test(dealii::ConditionalOStream &pcout,
     preconditioner->reinit();
     //
     /// GMG
+
     std::unique_ptr<Function<dim, Number>> rhs_function;
-    std::unique_ptr<Function<dim, Number>>
-      exact_solution = std::make_unique<ExactSolution<dim, Number>>(frequency),
-      exact_solution_v;
-    if (parameters.problem == ProblemType::wave)
+    std::unique_ptr<Function<dim, Number>> exact_solution, exact_solution_v;
+    if (parameters.space_time_conv_test)
       {
-        rhs_function =
-          std::make_unique<wave::RHSFunction<dim, Number>>(frequency);
-        exact_solution_v =
-          std::make_unique<wave::ExactSolutionV<dim, Number>>(frequency);
+        exact_solution =
+          std::make_unique<ExactSolution<dim, Number>>(frequency);
+        if (parameters.problem == ProblemType::wave)
+          {
+            rhs_function =
+              std::make_unique<wave::RHSFunction<dim, Number>>(frequency);
+            exact_solution_v =
+              std::make_unique<wave::ExactSolutionV<dim, Number>>(frequency);
+          }
+        else
+          {
+            rhs_function =
+              std::make_unique<RHSFunction<dim, Number>>(frequency);
+          }
       }
     else
       {
-        rhs_function = std::make_unique<RHSFunction<dim, Number>>(frequency);
+        exact_solution = std::make_unique<Functions::CutOffFunctionCinfty<dim>>(
+          1.e-2, parameters.source, 1, numbers::invalid_unsigned_int, true);
+        rhs_function = std::make_unique<Functions::ZeroFunction<dim, Number>>();
+        exact_solution_v =
+          std::make_unique<Functions::ZeroFunction<dim, Number>>();
       }
     auto integrate_rhs_function =
-      [&mapping, &dof_handler, &quad, &rhs_function, &constraints](
+      [&mapping, &dof_handler, &quad, &rhs_function, &constraints, &parameters](
         const double time, VectorType &rhs) -> void {
       rhs_function->set_time(time);
       rhs = 0.0;
-      VectorTools::create_right_hand_side(
-        mapping, dof_handler, quad, *rhs_function, rhs, constraints);
+      if (parameters.space_time_conv_test)
+        VectorTools::create_right_hand_side(
+          mapping, dof_handler, quad, *rhs_function, rhs, constraints);
     };
-    [[maybe_unused]] auto evaluate_exact_solution =
-      [&mapping, &dof_handler, &exact_solution](const double time,
-                                                VectorType  &tmp) -> void {
+    auto evaluate_exact_solution = [&mapping,
+                                    &dof_handler,
+                                    &exact_solution,
+                                    &parameters](const double time,
+                                                 VectorType  &tmp) -> void {
       exact_solution->set_time(time);
       VectorTools::interpolate(mapping, dof_handler, *exact_solution, tmp);
     };
-    [[maybe_unused]] auto evaluate_exact_v_solution =
-      [&mapping, &dof_handler, &exact_solution_v](const double time,
-                                                  VectorType  &tmp) -> void {
+    auto evaluate_exact_v_solution = [&mapping,
+                                      &dof_handler,
+                                      &exact_solution_v,
+                                      &parameters](const double time,
+                                                   VectorType  &tmp) -> void {
       exact_solution_v->set_time(time);
       VectorTools::interpolate(mapping, dof_handler, *exact_solution_v, tmp);
     };
     auto evaluate_numerical_solution =
-      [&constraints, &basis, &parameters](const double           time,
-                                          VectorType            &tmp,
-                                          BlockVectorType const &x,
-                                          VectorType const      &prev_x,
-                                          unsigned block_offset = 0) -> void {
+      [&constraints, &basis, &is_cgp](const double           time,
+                                      VectorType            &tmp,
+                                      BlockVectorType const &x,
+                                      VectorType const      &prev_x,
+                                      unsigned block_offset = 0) -> void {
       int i = 0;
       tmp   = 0.0;
       for (auto const &el : basis)
         {
           if (double v = el.value(time); v != 0.0)
             {
-              if (parameters.type == TimeStepType::DG)
+              if (!is_cgp)
                 tmp.add(v, x.block(block_offset + i));
               else
                 tmp.add(v,
                         (block_offset + i == 0) ?
-                                 prev_x :
-                                 x.block(block_offset + i - 1));
+                          prev_x :
+                          x.block(block_offset + i - 1));
             }
           ++i;
         }
@@ -413,9 +442,45 @@ test(dealii::ConditionalOStream &pcout,
         for (unsigned int i = 0; i < n_blocks; ++i)
           matrix->initialize_dof_vector(v.block(i));
       }
+    // Point eval
+    auto real_points = dim == 2 ?
+                         std::vector<Point<dim, Number>>{{0.75, 0}} :
+                         std::vector<Point<dim, Number>>{{0.75, 0, 0},
+                                                         {0, 0, 0.75},
+                                                         {0.75, 0.1, 0.75}};
 
+    Utilities::MPI::RemotePointEvaluation<dim, dim> rpe;
+    rpe.reinit(real_points, tria, mapping);
+    unsigned int i_eval_f          = 0;
+    auto const   evaluate_function = [&](const ArrayView<Number> &values,
+                                       const auto              &cell_data) {
+      FEPointEvaluation<1, dim> fe_point(mapping, fe, update_values);
+      std::vector<Number>       local_values;
+      for (const auto cell : cell_data.cell_indices())
+        {
+          auto const cell_dofs =
+            cell_data.get_active_cell_iterator(cell)->as_dof_handler_iterator(
+              dof_handler);
+          auto const unit_points = cell_data.get_unit_points(cell);
+          auto const local_value = cell_data.get_data_view(cell, values);
+          local_values.resize(cell_dofs->get_fe().n_dofs_per_cell());
+          cell_dofs->get_dof_values(x.block(i_eval_f),
+                                    local_values.begin(),
+                                    local_values.end());
+
+          fe_point.reinit(cell_dofs, unit_points);
+          fe_point.evaluate(local_values, EvaluationFlags::values);
+
+          for (unsigned int q = 0; q < unit_points.size(); ++q)
+            local_value[q] = fe_point.get_value(q);
+        }
+    };
+
+
+#ifdef DEBUG
     VectorType exact;
     matrix->initialize_dof_vector(exact);
+#endif
     VectorType numeric;
     matrix->initialize_dof_vector(numeric);
 
@@ -440,7 +505,8 @@ test(dealii::ConditionalOStream &pcout,
         *preconditioner,
         *rhs_matrix,
         integrate_rhs_function,
-        n_timesteps_at_once);
+        n_timesteps_at_once,
+        parameters.extrapolate);
     else
       step = std::make_unique<TimeIntegratorWave<dim, Number, Preconditioner>>(
         parameters.type,
@@ -455,15 +521,90 @@ test(dealii::ConditionalOStream &pcout,
         *rhs_matrix,
         *rhs_matrix_v,
         integrate_rhs_function,
-        n_timesteps_at_once);
+        n_timesteps_at_once,
+        parameters.extrapolate);
 
     // interpolate initial value
-    auto nt_dofs = static_cast<unsigned int>(n_blocks / n_timesteps_at_once);
     evaluate_exact_solution(0, x.block(x.n_blocks() - 1));
     if (parameters.problem == ProblemType::wave)
       evaluate_exact_v_solution(0, v.block(v.n_blocks() - 1));
-    double l2 = 0., l8 = -1., h1_semi = 0.;
-    int    i = 0, total_gmres_iterations = 0;
+    double           l2 = 0., l8 = -1., h1_semi = 0.;
+    constexpr double qNaN           = std::numeric_limits<double>::quiet_NaN();
+    bool const       st_convergence = parameters.space_time_conv_test;
+    int              i = 0, total_gmres_iterations = 0;
+
+    unsigned int samples_per_interval = (fe_degree + 1) * (fe_degree + 1);
+    double       sample_step          = 1.0 / (samples_per_interval - 1);
+    i_eval_f                          = x.n_blocks() - 1;
+    x.block(i_eval_f).update_ghost_values();
+    std::vector<Number> output_point_evaluation =
+      rpe.template evaluate_and_process<Number>(evaluate_function);
+    x.block(i_eval_f).zero_out_ghost_values();
+
+    std::vector<Number> prev_output_pt_eval = output_point_evaluation;
+    FullMatrix<Number>  output_pt_eval(fe_degree + 1, real_points.size());
+    FullMatrix<Number>  time_evaluator =
+      get_time_evaluation_matrix<Number>(basis, samples_per_interval);
+    FullMatrix<Number> output_pt_eval_res(samples_per_interval,
+                                          real_points.size());
+    auto const         do_point_evaluation = [&]() {
+      for (unsigned int it = 0; it < n_timesteps_at_once; ++it)
+        {
+          if (is_cgp)
+            std::copy_n(prev_output_pt_eval.begin(),
+                        prev_output_pt_eval.size(),
+                        output_pt_eval.begin(0));
+          for (unsigned int t_dof = 0; t_dof < nt_dofs; ++t_dof)
+            {
+              i_eval_f = it * nt_dofs + t_dof;
+              x.block(i_eval_f).update_ghost_values();
+              output_point_evaluation =
+                rpe.template evaluate_and_process<Number>(evaluate_function);
+              if (!rpe.is_map_unique())
+                {
+                  auto const         &point_indices = rpe.get_point_ptrs();
+                  std::vector<Number> new_output;
+                  new_output.reserve(point_indices.size() - 1);
+                  for (auto el : point_indices)
+                    if (el < output_point_evaluation.size())
+                      new_output.push_back(output_point_evaluation[el]);
+
+                  output_point_evaluation.swap(new_output);
+                }
+              std::copy_n(output_point_evaluation.begin(),
+                          output_point_evaluation.size(),
+                          output_pt_eval.begin(t_dof + is_cgp));
+              x.block(i_eval_f).zero_out_ghost_values();
+            }
+          time_evaluator.mmult(output_pt_eval_res, output_pt_eval);
+          if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
+            {
+              std::ofstream file(parameters.functional_file, std::ios::app);
+              for (unsigned int row = 0; row < output_pt_eval_res.m(); ++row)
+                {
+                  double t_ = time + time_step_size * (it + row * sample_step);
+                  file << std::setw(16) << std::scientific << t_;
+                  for (unsigned int c = 0; c < output_pt_eval_res.n(); ++c)
+                    file << std::setw(16) << std::scientific << " "
+                         << output_pt_eval_res(row, c);
+                  file << '\n';
+                }
+              file << '\n';
+            }
+
+          prev_output_pt_eval = output_point_evaluation;
+        }
+    };
+    auto const data_output = [&](VectorType const &v, std::string const &name) {
+      DataOut<dim> data_out;
+      data_out.attach_dof_handler(dof_handler);
+      data_out.add_data_vector(v, "u");
+      data_out.build_patches();
+      data_out.set_flags(DataOutBase::VtkFlags(time, timestep_number));
+      data_out.write_vtu_with_pvtu_record(
+        "./", name, timestep_number, tria.get_communicator(), 4);
+    };
+
     while (time < end_time)
       {
         TimerOutput::Scope scope(timer, "step");
@@ -488,41 +629,33 @@ test(dealii::ConditionalOStream &pcout,
         total_gmres_iterations += step->last_step();
         for (unsigned int i = 0; i < n_blocks; ++i)
           constraints.distribute(x.block(i));
-        auto error_on_In = error_calculator.evaluate_error(
-          time, time_step_size, x, prev_x, n_timesteps_at_once);
-        time += n_timesteps_at_once * time_step_size;
+        if (st_convergence)
+          {
+            auto error_on_In = error_calculator.evaluate_error(
+              time, time_step_size, x, prev_x, n_timesteps_at_once);
+            l2 += error_on_In[VectorTools::L2_norm];
+            l8 = std::max(error_on_In[VectorTools::Linfty_norm], l8);
+            h1_semi += error_on_In[VectorTools::H1_seminorm];
+          }
+        else
+          do_point_evaluation();
 
-        l2 += error_on_In[VectorTools::L2_norm];
-        l8 = std::max(error_on_In[VectorTools::Linfty_norm], l8);
-        h1_semi += error_on_In[VectorTools::H1_seminorm];
+        time += n_timesteps_at_once * time_step_size;
         ++i;
+
         if (do_output)
           {
             numeric = 0.0;
             evaluate_numerical_solution(
               1.0, numeric, x, prev_x, (n_timesteps_at_once - 1) * nt_dofs);
-            DataOut<dim> data_out;
-            data_out.attach_dof_handler(dof_handler);
-            data_out.add_data_vector(numeric, "solution");
-            data_out.build_patches();
-
-            std::ofstream output("solution." +
-                                 Utilities::int_to_string(timestep_number, 4) +
-                                 ".vtu");
-            data_out.write_vtu(output);
+            data_output(numeric, "solution");
           }
 #ifdef DEBUG
-        if (do_output)
+        if (do_output && st_convergence)
           {
             exact = 0.0;
             evaluate_exact_solution(time, exact);
-            DataOut<dim> data_out;
-            data_out.attach_dof_handler(dof_handler);
-            data_out.add_data_vector(exact, "solution");
-            data_out.build_patches();
-            std::ofstream output(
-              "exact." + Utilities::int_to_string(timestep_number, 4) + ".vtu");
-            data_out.write_vtu(output);
+            data_output(exact, "exact");
           }
 #endif
       }
@@ -540,18 +673,26 @@ test(dealii::ConditionalOStream &pcout,
     table.add_value("s-dofs", n_dofs);
     table.add_value("t-dofs", n_blocks);
     table.add_value("st-dofs", i * n_dofs * n_blocks);
-    table.add_value("L\u221E-L\u221E", l8);
-    table.add_value("L2-L2", std::sqrt(l2));
-    table.add_value("L2-H1_semi", std::sqrt(h1_semi));
+    table.add_value("L\u221E-L\u221E", st_convergence ? l8 : qNaN);
+    table.add_value("L2-L2", st_convergence ? std::sqrt(l2) : qNaN);
+    table.add_value("L2-H1_semi", st_convergence ? std::sqrt(h1_semi) : qNaN);
   };
-  for (unsigned int j = parameters.fe_degree;
-       j < parameters.fe_degree + parameters.n_deg_cycles;
-       ++j)
+  auto const [k, d_cyc, r_cyc, r] = std::visit(
+    [](auto const &p) {
+      return std::make_tuple(p.fe_degree,
+                             p.n_deg_cycles,
+                             p.n_ref_cycles,
+                             p.refinement);
+    },
+    parameters);
+
+  for (unsigned int j = k; j < k + d_cyc; ++j)
     {
-      for (unsigned int i = parameters.refinement;
-           i < parameters.refinement + parameters.n_ref_cycles;
-           ++i)
-        convergence_test(i, j, parameters);
+      for (unsigned int i = r; i < r + r_cyc; ++i)
+        if (dim == 2)
+          convergence_test(i, j, std::get<Parameters<2>>(parameters));
+        else
+          convergence_test(i, j, std::get<Parameters<3>>(parameters));
 
       table.set_precision("L\u221E-L\u221E", 5);
       table.set_precision("L2-L2", 5);
@@ -587,30 +728,42 @@ main(int argc, char **argv)
   std::ofstream pout(filename);
   dealii::deallog.attach(pout);
   dealii::deallog.depth_console(0);
-  MPI_Comm  comm = MPI_COMM_WORLD;
-  const int dim  = 2;
-#define PRECONDITIONER_FLOAT
-#ifdef PRECONDITIONER_FLOAT
-#  define test test<dim, double, float>
-#else
-#  define test test<dim, double, double>
-#endif
-  dealii::deallog << "HEAT 2 steps at once" << std::endl;
-  test(pcout, comm, "tests/json/tf01.json");
-  test(pcout, comm, "tests/json/tf02.json");
-
-  dealii::deallog << "HEAT single step" << std::endl;
-  test(pcout, comm, "tests/json/tf03.json");
-  test(pcout, comm, "tests/json/tf04.json");
-
-  dealii::deallog << "WAVE 4 steps at once" << std::endl;
-  test(pcout, comm, "tests/json/tf05.json");
-  test(pcout, comm, "tests/json/tf06.json");
-
-  dealii::deallog << "WAVE single step" << std::endl;
-  test(pcout, comm, "tests/json/tf07.json");
-  test(pcout, comm, "tests/json/tf08.json");
-#undef test
+  MPI_Comm    comm               = MPI_COMM_WORLD;
+  std::string file               = "default";
+  int         dim                = 2;
+  bool        precondition_float = true;
+  {
+    namespace arg_t = util::arg_type;
+    util::cl_options clo(argc, argv);
+    clo.insert(file, "file", arg_t::required, 'f', "Path to parameterfile");
+    clo.insert(dim, "dim", arg_t::required, 'd', "Spatial dimensions");
+    clo.insert(precondition_float, "precondition_float", arg_t::none, 'p');
+  }
+  auto tst = [&](std::string file_name) {
+    if (precondition_float)
+      test<double, float>(pcout, comm, file_name, dim);
+    else
+      test<double, double>(pcout, comm, file_name, dim);
+  };
+  if (file == "default")
+    {
+      std::vector<std::pair<std::string, std::string>> tests = {
+        {"HEAT 2 steps at once DG\n", "tests/json/tf01.json"},
+        {"", "tests/json/tf02.json"},
+        {"HEAT single step\n", "tests/json/tf03.json"},
+        {"", "tests/json/tf04.json"},
+        {"WAVE 4 steps at once\n", "tests/json/tf05.json"},
+        {"", "tests/json/tf06.json"},
+        {"WAVE single step\n", "tests/json/tf07.json"},
+        {"", "tests/json/tf08.json"}};
+      for (const auto &[header, file_name] : tests)
+        {
+          dealii::deallog << header;
+          tst(file_name);
+        }
+    }
+  else
+    tst(file);
 
   dealii::deallog << std::endl;
   pcout << std::endl;

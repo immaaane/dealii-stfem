@@ -553,6 +553,7 @@ namespace dealii
     bool restrict_is_transpose_prolongate = true;
     bool variable                         = true;
   };
+  template <int dim>
   struct Parameters
   {
     bool         do_output               = false;
@@ -569,6 +570,14 @@ namespace dealii
     unsigned int n_ref_cycles            = 1;
     double       frequency               = 1.0;
     int          refinement              = 2;
+    bool         space_time_conv_test    = true;
+    bool         extrapolate             = true;
+    std::string  functional_file         = "functionals.txt";
+    Point<dim>   hyperrect_lower_left =
+      dim == 2 ? Point<dim>(0., 0.) : Point<dim>(0., 0., 0.);
+    Point<dim> hyperrect_upper_right =
+      dim == 2 ? Point<dim>(1., 1.) : Point<dim>(1., 1., 1.);
+    Point<dim> source = .5 * hyperrect_lower_left + .5 * hyperrect_upper_right;
 
     PreconditionerGMGAdditionalData mg_data;
     void
@@ -590,6 +599,13 @@ namespace dealii
       prm.add_parameter("nRefCycles", n_ref_cycles);
       prm.add_parameter("frequency", frequency);
       prm.add_parameter("refinement", refinement);
+      prm.add_parameter("SpaceTimeConvergenceTest", space_time_conv_test);
+      prm.add_parameter("Extrapolate", extrapolate);
+      prm.add_parameter("FunctionalFile", functional_file);
+      prm.add_parameter("HyperRectLowerLeft", hyperrect_lower_left);
+      prm.add_parameter("HyperRectUpperRight", hyperrect_upper_right);
+      prm.add_parameter("SourcePoint", source);
+
       prm.add_parameter("smoothingDegree", mg_data.smoothing_degree);
       prm.add_parameter("estimateRelaxation", mg_data.estimate_relaxation);
       prm.add_parameter("coarseGridSmootherType",
@@ -613,7 +629,7 @@ namespace dealii
                    1,
                    static_cast<int>(n_timesteps_at_once));
       const int lowest_degree = type == TimeStepType::DG ? 0 : 1;
-      if (fe_degree_min = -1)
+      if (fe_degree_min == -1)
         fe_degree_min = fe_degree - 1;
       fe_degree_min =
         std::clamp(fe_degree_min, lowest_degree, static_cast<int>(fe_degree));
@@ -637,7 +653,7 @@ namespace dealii
   public:
     GMG(
       TimerOutput                   &timer,
-      Parameters const              &parameters,
+      Parameters<dim> const         &parameters,
       unsigned int const             r,
       unsigned int const             n_timesteps_at_once,
       const std::vector<TimeMGType> &mg_type_level,
