@@ -76,10 +76,14 @@ test(dealii::ConditionalOStream &pcout,
     parallel::distributed::Triangulation<dim> tria(comm_global);
     DoFHandler<dim>                           dof_handler(tria);
 
-    GridGenerator::hyper_rectangle(tria,
-                                   parameters.hyperrect_lower_left,
-                                   parameters.hyperrect_upper_right);
+    GridGenerator::subdivided_hyper_rectangle(tria,
+                                              parameters.subdivisions,
+                                              parameters.hyperrect_lower_left,
+                                              parameters.hyperrect_upper_right);
+    double spc_step = GridTools::minimal_cell_diameter(tria) / std::sqrt(dim);
     tria.refine_global(refinement);
+    if (parameters.distort_grid != 0.0)
+      GridTools::distort_random(parameters.distort_grid, tria);
 
     dof_handler.distribute_dofs(fe);
 
@@ -90,7 +94,8 @@ test(dealii::ConditionalOStream &pcout,
     DoFTools::make_hanging_node_constraints(dof_handler, constraints);
     DoFTools::make_zero_boundary_constraints(dof_handler, constraints);
     constraints.close();
-    pcout << ":: Number of active cells: " << tria.n_active_cells() << "\n"
+    pcout << ":: Number of active cells: " << tria.n_global_active_cells()
+          << "\n"
           << ":: Number of degrees of freedom: " << dof_handler.n_dofs()
           << "\n";
 
@@ -112,16 +117,20 @@ test(dealii::ConditionalOStream &pcout,
     SparseMatrixType M;
     M.reinit(sparsity_pattern);
 
-    double time           = 0.;
-    double end_time       = 1.;
-    double time_step_size = end_time * pow(2.0, -(refinement + 1));
+    double       time     = 0.;
+    double       time_len = parameters.end_time - time;
+    unsigned int n_steps  = static_cast<unsigned int>((time_len) / spc_step);
+    double time_step_size = time_len * pow(2.0, -(refinement + 1)) / n_steps;
     Number frequency      = parameters.frequency;
 
+    Coefficient<dim> coeff(parameters);
     // matrix-free operators
     MatrixFreeOperator<dim, Number> K_mf(
       mapping, dof_handler, constraints, quad, 0.0, 1.0);
     MatrixFreeOperator<dim, Number> M_mf(
       mapping, dof_handler, constraints, quad, 1.0, 0.0);
+    if (!parameters.space_time_conv_test)
+      K_mf.evaluate_coefficient(coeff);
 
     if (false)
       {
@@ -274,6 +283,8 @@ test(dealii::ConditionalOStream &pcout,
         auto M_mf_ =
           std::make_shared<MatrixFreeOperator<dim, NumberPreconditioner>>(
             mapping, *dof_handler_, *constraints_, quad, 1.0, 0.0);
+        if (!parameters.space_time_conv_test)
+          K_mf_->evaluate_coefficient(coeff);
 
         auto const &lhs_uK_p =
           parameters.problem == ProblemType::heat ? fetw[l][0] : fetw_w[l][0];
@@ -605,7 +616,7 @@ test(dealii::ConditionalOStream &pcout,
         "./", name, timestep_number, tria.get_communicator(), 4);
     };
 
-    while (time < end_time)
+    while (time < parameters.end_time)
       {
         TimerOutput::Scope scope(timer, "step");
 
@@ -667,7 +678,7 @@ test(dealii::ConditionalOStream &pcout,
     if (print_timing)
       timer.print_wall_time_statistics(MPI_COMM_WORLD);
 
-    unsigned int const n_active_cells = tria.n_active_cells();
+    unsigned int const n_active_cells = tria.n_global_active_cells();
     unsigned int const n_dofs         = dof_handler.n_dofs();
     table.add_value("cells", n_active_cells);
     table.add_value("s-dofs", n_dofs);
