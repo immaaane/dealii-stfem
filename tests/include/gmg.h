@@ -581,6 +581,7 @@ namespace dealii
     double                    distort_grid  = 0.0;
     double                    distort_coeff = 0.0;
     Point<dim> source = .5 * hyperrect_lower_left + .5 * hyperrect_upper_right;
+    double     end_time = 1.0;
 
     PreconditionerGMGAdditionalData mg_data;
     void
@@ -588,29 +589,30 @@ namespace dealii
     {
       std::string              type_, problem_;
       dealii::ParameterHandler prm;
-      prm.add_parameter("DoOutput", do_output);
-      prm.add_parameter("PrintTiming", print_timing);
-      prm.add_parameter("SpaceTimeMG", space_time_mg);
-      prm.add_parameter("MGTimeBeforeSpace", time_before_space);
-      prm.add_parameter("TimeType", type_);
-      prm.add_parameter("ProblemType", problem_);
+      prm.add_parameter("doOutput", do_output);
+      prm.add_parameter("printTiming", print_timing);
+      prm.add_parameter("spaceTimeMg", space_time_mg);
+      prm.add_parameter("mgTimeBeforeSpace", time_before_space);
+      prm.add_parameter("timeType", type_);
+      prm.add_parameter("problemType", problem_);
       prm.add_parameter("nTimestepsAtOnce", n_timesteps_at_once);
       prm.add_parameter("nTimestepsAtOnceMin", n_timesteps_at_once_min);
-      prm.add_parameter("FeDegree", fe_degree);
-      prm.add_parameter("FeDegreeMin", fe_degree_min);
+      prm.add_parameter("feDegree", fe_degree);
+      prm.add_parameter("feDegreeMin", fe_degree_min);
       prm.add_parameter("nDegCycles", n_deg_cycles);
       prm.add_parameter("nRefCycles", n_ref_cycles);
       prm.add_parameter("frequency", frequency);
       prm.add_parameter("refinement", refinement);
-      prm.add_parameter("SpaceTimeConvergenceTest", space_time_conv_test);
-      prm.add_parameter("Extrapolate", extrapolate);
-      prm.add_parameter("FunctionalFile", functional_file);
-      prm.add_parameter("HyperRectLowerLeft", hyperrect_lower_left);
-      prm.add_parameter("HyperRectUpperRight", hyperrect_upper_right);
-      prm.add_parameter("Subdivisions", subdivisions);
-      prm.add_parameter("DistortGrid", distort_grid);
-      prm.add_parameter("DistortCoeff", distort_coeff);
-      prm.add_parameter("SourcePoint", source);
+      prm.add_parameter("spaceTimeConvergenceTest", space_time_conv_test);
+      prm.add_parameter("extrapolate", extrapolate);
+      prm.add_parameter("functionalFile", functional_file);
+      prm.add_parameter("hyperRectLowerLeft", hyperrect_lower_left);
+      prm.add_parameter("hyperRectUpperRight", hyperrect_upper_right);
+      prm.add_parameter("subdivisions", subdivisions);
+      prm.add_parameter("distortGrid", distort_grid);
+      prm.add_parameter("distortCoeff", distort_coeff);
+      prm.add_parameter("sourcePoint", source);
+      prm.add_parameter("endTime", end_time);
 
       prm.add_parameter("smoothingDegree", mg_data.smoothing_degree);
       prm.add_parameter("estimateRelaxation", mg_data.estimate_relaxation);
