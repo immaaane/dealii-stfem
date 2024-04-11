@@ -16,5 +16,6 @@
     "FunctionalFile"         : "practical_02.txt",
     "HyperRectLowerLeft"     : "-1.0,-1.0,-1.0",
     "HyperRectUpperRight"    : "1.0,1.0,1.0",
+    "Subdivisions"           : "5,5,5",
     "SourcePoint"            : "0.0,0.0,0.0"
 }

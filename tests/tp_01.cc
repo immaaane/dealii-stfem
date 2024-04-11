@@ -76,10 +76,13 @@ test(dealii::ConditionalOStream &pcout,
     parallel::distributed::Triangulation<dim> tria(comm_global);
     DoFHandler<dim>                           dof_handler(tria);
 
-    GridGenerator::hyper_rectangle(tria,
-                                   parameters.hyperrect_lower_left,
-                                   parameters.hyperrect_upper_right);
+    GridGenerator::subdivided_hyper_rectangle(tria,
+                                              parameters.subdivisions,
+                                              parameters.hyperrect_lower_left,
+                                              parameters.hyperrect_upper_right);
     tria.refine_global(refinement);
+    if (parameters.distort_grid != 0.0)
+      GridTools::distort_random(parameters.distort_grid, tria);
 
     dof_handler.distribute_dofs(fe);
 
@@ -117,11 +120,14 @@ test(dealii::ConditionalOStream &pcout,
     double time_step_size = end_time * pow(2.0, -(refinement + 1));
     Number frequency      = parameters.frequency;
 
+    Coefficient<dim> coeff(parameters);
     // matrix-free operators
     MatrixFreeOperator<dim, Number> K_mf(
       mapping, dof_handler, constraints, quad, 0.0, 1.0);
     MatrixFreeOperator<dim, Number> M_mf(
       mapping, dof_handler, constraints, quad, 1.0, 0.0);
+    if (!parameters.space_time_conv_test)
+      K_mf.evaluate_coefficient(coeff);
 
     if (false)
       {
@@ -274,6 +280,8 @@ test(dealii::ConditionalOStream &pcout,
         auto M_mf_ =
           std::make_shared<MatrixFreeOperator<dim, NumberPreconditioner>>(
             mapping, *dof_handler_, *constraints_, quad, 1.0, 0.0);
+        if (!parameters.space_time_conv_test)
+          K_mf_->evaluate_coefficient(coeff);
 
         auto const &lhs_uK_p =
           parameters.problem == ProblemType::heat ? fetw[l][0] : fetw_w[l][0];

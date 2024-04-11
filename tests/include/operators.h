@@ -6,6 +6,9 @@
 #include <deal.II/matrix_free/matrix_free.h>
 #include <deal.II/matrix_free/tools.h>
 
+#include <boost/random/mersenne_twister.hpp>
+#include <boost/random/uniform_real_distribution.hpp>
+
 #include "types.h"
 
 namespace dealii
@@ -252,38 +255,95 @@ namespace dealii
   template <int dim>
   class Coefficient final : public Function<dim>
   {
-    double c1, c2, c3;
+    double             c1, c2, c3;
+    bool               distorted;
+    Point<dim>         lower_left;
+    Point<dim>         step_size;
+    Table<dim, double> distortion;
+
+    template <typename number>
+    double
+    get_coefficient(number px, number py) const
+    {
+      if (py >= 0.2)
+        {
+          if (px < 0.2)
+            return c2;
+          else
+            return c3;
+        }
+      return c1;
+    }
+
 
   public:
-    Coefficient(double c1_ = 1.0, double c2_ = 9.0, double c3_ = 16.0)
+    Coefficient(Parameters<dim> const &params,
+                double                 c1_ = 1.0,
+                double                 c2_ = 9.0,
+                double                 c3_ = 16.0)
       : c1(c1_)
       , c2(c2_)
       , c3(c3_)
-    {}
+      , distorted(params.distort_coeff != 0.0)
+      , lower_left(params.hyperrect_lower_left)
+    {
+      if (distorted)
+        {
+          auto const &subdivisions = params.subdivisions;
+          if constexpr (dim == 2)
+            distortion = Table<2, double>(subdivisions[0], subdivisions[1]);
+          else
+            distortion = Table<3, double>(subdivisions[0],
+                                          subdivisions[1],
+                                          subdivisions[2]);
+          std::vector<double>    tmp(distortion.n_elements());
+          boost::random::mt19937 rng(boost::random::mt19937::default_seed);
+          boost::random::uniform_real_distribution<> uniform_distribution(
+            1 - params.distort_coeff, 1 + params.distort_coeff);
+          std::generate(tmp.begin(), tmp.end(), [&]() {
+            return uniform_distribution(rng);
+          });
+          distortion.fill(tmp.begin());
+          auto const extent =
+            params.hyperrect_upper_right - params.hyperrect_lower_left;
+          for (int i = 0; i < dim; ++i)
+            step_size[i] = extent[i] / subdivisions[i];
+        }
+    }
 
     virtual double
     value(const Point<dim> &p, const unsigned int /*component*/) const override
     {
-      if (p[1] < 0.2)
-        return c1;
-
-      return p[0] < 0.2 ? c2 : c3;
+      return get_coefficient(p[0], p[1]);
     }
 
     template <typename number>
     number
     value(const Point<dim, number> &p) const
     {
-      number value(c1);
+      number value;
       auto   v = value.begin();
-      for (auto px = p[0].begin(), py = p[1].begin(); px != p[0].end();
-           ++px, ++py, ++v)
-        if (*py >= 0.2)
+      if constexpr (dim == 2)
+        for (auto px = p[0].begin(), py = p[1].begin(); px != p[0].end();
+             ++px, ++py, ++v)
           {
-            if (*px < 0.2)
-              *v = c2;
-            else
-              *v = c3;
+            *v = get_coefficient(*px, *py);
+            if (distorted)
+              *v *= distortion(
+                static_cast<unsigned>((*px - lower_left[0]) / step_size[0]),
+                static_cast<unsigned>((*py - lower_left[1]) / step_size[1]));
+          }
+      else
+        for (auto px = p[0].begin(), py = p[1].begin(), pz = p[2].begin();
+             px != p[0].end();
+             ++px, ++py, ++pz, ++v)
+          {
+            *v = get_coefficient(*px, *py);
+            if (distorted)
+              *v *= distortion(
+                static_cast<unsigned>((*px - lower_left[0]) / step_size[0]),
+                static_cast<unsigned>((*py - lower_left[1]) / step_size[1]),
+                static_cast<unsigned>((*pz - lower_left[2]) / step_size[2]));
           }
       return value;
     }

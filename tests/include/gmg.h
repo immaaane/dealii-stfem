@@ -577,6 +577,9 @@ namespace dealii
       dim == 2 ? Point<dim>(0., 0.) : Point<dim>(0., 0., 0.);
     Point<dim> hyperrect_upper_right =
       dim == 2 ? Point<dim>(1., 1.) : Point<dim>(1., 1., 1.);
+    std::vector<unsigned int> subdivisions  = std::vector<unsigned int>(dim, 1);
+    double                    distort_grid  = 0.0;
+    double                    distort_coeff = 0.0;
     Point<dim> source = .5 * hyperrect_lower_left + .5 * hyperrect_upper_right;
 
     PreconditionerGMGAdditionalData mg_data;
@@ -604,6 +607,9 @@ namespace dealii
       prm.add_parameter("FunctionalFile", functional_file);
       prm.add_parameter("HyperRectLowerLeft", hyperrect_lower_left);
       prm.add_parameter("HyperRectUpperRight", hyperrect_upper_right);
+      prm.add_parameter("Subdivisions", subdivisions);
+      prm.add_parameter("DistortGrid", distort_grid);
+      prm.add_parameter("DistortCoeff", distort_coeff);
       prm.add_parameter("SourcePoint", source);
 
       prm.add_parameter("smoothingDegree", mg_data.smoothing_degree);
