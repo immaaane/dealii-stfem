@@ -23,7 +23,7 @@ generate_convergence_parameters() {
                     testNameSuffix="_distort"
                 fi
                 testName="tests/json/convergence${testNameSuffix}_${problem}_${timeType}"
-                filename=$(python tests/json/generate.py --testName $testName --dim $dim $printTiming $spaceTimeMg --timeType $timeType --problemType $problem --nDegCycles $nDegCycles --nRefCycles $nRefCycles --frequency $frequency $spaceTimeConvergenceTest $extrapolate --distortGrid $distortGrid --feDegree 2)
+                filename=$(python tests/json/generate.py --testName $testName --dim $dim $printTiming $spaceTimeMg --timeType $timeType --problemType $problem --nDegCycles $nDegCycles --nRefCycles $nRefCycles --frequency $frequency $spaceTimeConvergenceTest $extrapolate --distortGrid $distortGrid --feDegree 2 --variable)
                 filenames_c+=($filename)
             done
         done
@@ -49,7 +49,7 @@ generate_practical_parameters() {
                     testNameSuffix="_rough"
                 fi
                 testName="tests/json/practical${testNameSuffix}_${problem}_${timeType}"
-                filename=$(python tests/json/generate.py --testName $testName --dim $dim $printTiming $spaceTimeMg --timeType $timeType --problemType $problem --nDegCycles $nDegCycles --nRefCycles $nRefCycles --distortCoeff $distortC --feDegree 2)
+                filename=$(python tests/json/generate.py --testName $testName --dim $dim $printTiming $spaceTimeMg --timeType $timeType --problemType $problem --nDegCycles $nDegCycles --nRefCycles $nRefCycles --distortCoeff $distortC --feDegree 2 --variable)
                 filenames_p+=($filename)
             done
         done
