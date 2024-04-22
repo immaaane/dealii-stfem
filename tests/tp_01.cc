@@ -48,6 +48,7 @@ test(dealii::ConditionalOStream &pcout,
     parameters = Parameters<3>();
   std::visit([&](auto &p) { p.parse(file_name); }, parameters);
   ConvergenceTable table;
+  ConvergenceTable itable;
 
   auto convergence_test = [&]<int dim>(int const              refinement,
                                        int const              fe_degree,
@@ -672,8 +673,9 @@ test(dealii::ConditionalOStream &pcout,
       }
     double average_gmres_iter = static_cast<double>(total_gmres_iterations) /
                                 static_cast<double>(timestep_number);
-    pcout << "Average GMRES iterations: " << average_gmres_iter << " (over "
-          << timestep_number << " timesteps)\n"
+    pcout << "Average GMRES iterations " << average_gmres_iter << " ("
+          << total_gmres_iterations << " gmres_iterations / " << timestep_number
+          << " timesteps)\n"
           << std::endl;
     if (print_timing)
       timer.print_wall_time_statistics(MPI_COMM_WORLD);
@@ -684,9 +686,11 @@ test(dealii::ConditionalOStream &pcout,
     table.add_value("s-dofs", n_dofs);
     table.add_value("t-dofs", n_blocks);
     table.add_value("st-dofs", i * n_dofs * n_blocks);
+    table.add_value("work", i * n_dofs * n_blocks * total_gmres_iterations);
     table.add_value("L\u221E-L\u221E", st_convergence ? l8 : qNaN);
     table.add_value("L2-L2", st_convergence ? std::sqrt(l2) : qNaN);
     table.add_value("L2-H1_semi", st_convergence ? std::sqrt(h1_semi) : qNaN);
+    itable.add_value(std::to_string(refinement), average_gmres_iter);
   };
   auto const [k, d_cyc, r_cyc, r] = std::visit(
     [](auto const &p) {
@@ -699,6 +703,7 @@ test(dealii::ConditionalOStream &pcout,
 
   for (unsigned int j = k; j < k + d_cyc; ++j)
     {
+      itable.add_value("k \\ r", j);
       for (unsigned int i = r; i < r + r_cyc; ++i)
         if (dim == 2)
           convergence_test(i, j, std::get<Parameters<2>>(parameters));
@@ -717,11 +722,16 @@ test(dealii::ConditionalOStream &pcout,
                                        ConvergenceTable::reduction_rate_log2);
       table.evaluate_convergence_rates("L2-H1_semi",
                                        ConvergenceTable::reduction_rate_log2);
+      pcout << "Convergence table k=" << j << std::endl;
       if (pcout.is_active())
         table.write_text(pcout.get_stream());
       pcout << std::endl;
       table.clear();
     }
+  pcout << "Iteration count table\n";
+  if (pcout.is_active())
+    itable.write_text(pcout.get_stream());
+  pcout << std::endl;
 }
 
 

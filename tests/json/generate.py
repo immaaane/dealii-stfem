@@ -1,8 +1,15 @@
 import json
 import os
 from argparse import ArgumentParser
+from hashlib import blake2b # just a fast hash function
 
-def run_instance(counter, options, subdivisions, source_point, lower_left, upper_right):
+def generate_hash(ds):
+    json_string = json.dumps(ds, sort_keys=True).encode()
+    hash_object = blake2b(digest_size=3)
+    hash_object.update(json_string)
+    return hash_object.hexdigest()
+
+def run_instance(options, subdivisions, source_point, lower_left, upper_right):
     with open(os.path.dirname(os.path.abspath(__file__)) + "/practical01.json", 'r') as f:
        datastore = json.load(f)
 
@@ -39,18 +46,22 @@ def run_instance(counter, options, subdivisions, source_point, lower_left, upper
     datastore["restrictIsTransposeProlongate"] = options.restrictIsTransposeProlongate
     datastore["variable"] = options.variable
 
+    unique_id = generate_hash(datastore)
+    filename = f"./{options.testName}_{unique_id}.json"
     # write data to output file
-    with open(f"./{options.testName}_{str(counter).zfill(4)}.json", 'w') as f:
+    with open(filename, 'w') as f:
         json.dump(datastore, f, indent=4, separators=(',', ': '))
+
+    print(filename)
 
 def parseArguments():
     parser = ArgumentParser(description="Submit a simulation as a batch job")
     parser.add_argument("--testName", default="input");
     parser.add_argument("--dim", type=int, default=3);
-    parser.add_argument("--doOutput", action="store_false");
-    parser.add_argument("--printTiming", action="store_false");
+    parser.add_argument("--doOutput", action="store_true");
+    parser.add_argument("--printTiming", action="store_true");
     parser.add_argument("--spaceTimeMg", action="store_true");
-    parser.add_argument("--mgTimeBeforeSpace", action="store_false");
+    parser.add_argument("--mgTimeBeforeSpace", action="store_true");
     parser.add_argument("--timeType", default="DG");
     parser.add_argument("--problemType", default="wave");
     parser.add_argument("--nTimestepsAtOnce", type=int, default=1);
@@ -105,13 +116,8 @@ def main():
             lower_left="0.0,0.0"
             upper_right="1.0,1.0"
 
-    counter=0
     initial_refinement=options.refinement
-
-    for n_refinements in range(2,8):
-        options.refinement=initial_refinement + n_refinements
-        run_instance(counter, options, subdivisions, source_point, lower_left, upper_right)
-        counter = counter + 1
+    run_instance(options, subdivisions, source_point, lower_left, upper_right)
 
 
 if __name__== "__main__":
