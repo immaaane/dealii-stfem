@@ -680,13 +680,15 @@ test(dealii::ConditionalOStream &pcout,
     if (print_timing)
       timer.print_wall_time_statistics(MPI_COMM_WORLD);
 
-    unsigned int const n_active_cells = tria.n_global_active_cells();
-    unsigned int const n_dofs         = dof_handler.n_dofs();
+    auto const   n_active_cells = tria.n_global_active_cells();
+    size_t const n_dofs         = static_cast<size_t>(dof_handler.n_dofs());
+    size_t const st_dofs        = i * n_dofs * n_blocks;
+    size_t const work           = st_dofs * total_gmres_iterations;
     table.add_value("cells", n_active_cells);
     table.add_value("s-dofs", n_dofs);
     table.add_value("t-dofs", n_blocks);
-    table.add_value("st-dofs", i * n_dofs * n_blocks);
-    table.add_value("work", i * n_dofs * n_blocks * total_gmres_iterations);
+    table.add_value("st-dofs", st_dofs);
+    table.add_value("work", work);
     table.add_value("L\u221E-L\u221E", st_convergence ? l8 : qNaN);
     table.add_value("L2-L2", st_convergence ? std::sqrt(l2) : qNaN);
     table.add_value("L2-H1_semi", st_convergence ? std::sqrt(h1_semi) : qNaN);
