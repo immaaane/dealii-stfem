@@ -19,9 +19,9 @@ submit_job() {
 
     # Wait for the job to finish
     while squeue -j "$job_id" | grep -q "$job_id"; do
-        sleep 1 # Check every minute if the job is still in the queue
+        sleep 60 # Check every minute if the job is still in the queue
     done
-    sleep 1 # to be sure file operations are completed
+    sleep 30 # to be sure file operations are completed
     local script_base_name=$(basename $script_file .sh)
 
     # Move output to designated directory
