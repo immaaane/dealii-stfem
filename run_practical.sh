@@ -1,7 +1,7 @@
 #!/bin/bash
 source ./generate_parameters.sh
 
-types="DG CG"
+types="DG CGP"
 distortCoeffs="0.0 0.6"
 
 # Run the function and store the output filenames

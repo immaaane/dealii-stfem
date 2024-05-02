@@ -2,7 +2,7 @@
 source ./generate_parameters.sh
 
 problems="wave heat"
-types="DG CG"
+types="DG CGP"
 distortGrids="0.0 0.15"
 
 # Run the function and store the output filenames
