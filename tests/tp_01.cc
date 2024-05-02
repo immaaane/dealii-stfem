@@ -683,7 +683,7 @@ test(dealii::ConditionalOStream &pcout,
     auto const   n_active_cells = tria.n_global_active_cells();
     size_t const n_dofs         = static_cast<size_t>(dof_handler.n_dofs());
     size_t const st_dofs        = i * n_dofs * n_blocks;
-    size_t const work           = st_dofs * total_gmres_iterations;
+    size_t const work           = n_dofs * n_blocks * total_gmres_iterations;
     table.add_value("cells", n_active_cells);
     table.add_value("s-dofs", n_dofs);
     table.add_value("t-dofs", n_blocks);
