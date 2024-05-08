@@ -466,6 +466,7 @@ test(dealii::ConditionalOStream &pcout,
     unsigned int i_eval_f          = 0;
     auto const   evaluate_function = [&](const ArrayView<Number> &values,
                                        const auto              &cell_data) {
+      unsigned int              ii = i_eval_f;
       FEPointEvaluation<1, dim> fe_point(mapping, fe, update_values);
       std::vector<Number>       local_values;
       for (const auto cell : cell_data.cell_indices())
@@ -476,7 +477,7 @@ test(dealii::ConditionalOStream &pcout,
           auto const unit_points = cell_data.get_unit_points(cell);
           auto const local_value = cell_data.get_data_view(cell, values);
           local_values.resize(cell_dofs->get_fe().n_dofs_per_cell());
-          cell_dofs->get_dof_values(x.block(i_eval_f),
+          cell_dofs->get_dof_values(x.block(ii),
                                     local_values.begin(),
                                     local_values.end());
 
@@ -552,6 +553,17 @@ test(dealii::ConditionalOStream &pcout,
     std::vector<Number> output_point_evaluation =
       rpe.template evaluate_and_process<Number>(evaluate_function);
     x.block(i_eval_f).zero_out_ghost_values();
+    if (!rpe.is_map_unique())
+      {
+        auto const         &point_indices = rpe.get_point_ptrs();
+        std::vector<Number> new_output;
+        new_output.reserve(point_indices.size() - 1);
+        for (auto el : point_indices)
+          if (el < output_point_evaluation.size())
+            new_output.push_back(output_point_evaluation[el]);
+
+        output_point_evaluation.swap(new_output);
+      }
 
     std::vector<Number> prev_output_pt_eval = output_point_evaluation;
     FullMatrix<Number>  output_pt_eval(fe_degree + 1, real_points.size());
@@ -560,6 +572,8 @@ test(dealii::ConditionalOStream &pcout,
     FullMatrix<Number> output_pt_eval_res(samples_per_interval,
                                           real_points.size());
     auto const         do_point_evaluation = [&]() {
+      Assert(output_pt_eval.n() >= prev_output_pt_eval.size(),
+             ExcLowerRange(output_pt_eval.n(), prev_output_pt_eval.size()));
       for (unsigned int it = 0; it < n_timesteps_at_once; ++it)
         {
           if (is_cgp)
@@ -583,6 +597,8 @@ test(dealii::ConditionalOStream &pcout,
 
                   output_point_evaluation.swap(new_output);
                 }
+              Assert(output_pt_eval.m() > t_dof + is_cgp,
+                     ExcLowerRange(output_pt_eval.m(), t_dof + is_cgp));
               std::copy_n(output_point_evaluation.begin(),
                           output_point_evaluation.size(),
                           output_pt_eval.begin(t_dof + is_cgp));
