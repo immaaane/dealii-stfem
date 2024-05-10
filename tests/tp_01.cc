@@ -786,15 +786,24 @@ main(int argc, char **argv)
   };
   if (file == "default")
     {
+#ifdef TESTDIRECTORY
+      std::string test_dir(TESTDIRECTORY);
+#else
+      Assert(
+        false,
+        ExcMessage(
+          "If TESTDIRECTORY is not defined parameter file have to be provided"));
+      std::exit();
+#endif
       std::vector<std::pair<std::string, std::string>> tests = {
-        {"HEAT 2 steps at once DG\n", "tests/json/tf01.json"},
-        {"", "tests/json/tf02.json"},
-        {"HEAT single step\n", "tests/json/tf03.json"},
-        {"", "tests/json/tf04.json"},
-        {"WAVE 4 steps at once\n", "tests/json/tf05.json"},
-        {"", "tests/json/tf06.json"},
-        {"WAVE single step\n", "tests/json/tf07.json"},
-        {"", "tests/json/tf08.json"}};
+        {"HEAT 2 steps at once DG\n", test_dir + "json/tf01.json"},
+        {"", test_dir + "json/tf02.json"},
+        {"HEAT single step\n", test_dir + "json/tf03.json"},
+        {"", test_dir + "json/tf04.json"},
+        {"WAVE 4 steps at once\n", test_dir + "json/tf05.json"},
+        {"", test_dir + "json/tf06.json"},
+        {"WAVE single step\n", test_dir + "json/tf07.json"},
+        {"", test_dir + "json/tf08.json"}};
       for (const auto &[header, file_name] : tests)
         {
           dealii::deallog << header;
