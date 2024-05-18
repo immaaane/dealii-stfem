@@ -1,0 +1,18 @@
+{
+    "doOutput"               : "true",
+    "printTiming"            : "false",
+    "spaceTimeMg"            : "true",
+    "mgTimeBeforeSpace"      : "false",
+    "timeType"               : "DG",
+    "problemType"            : "stokes",
+    "endTime"                : 1,
+    "nTimestepsAtOnce"       : "1",
+    "feDegree"               : "0",
+    "nDegCycles"             : "1",
+    "nRefCycles"             : "3",
+    "frequency"              : "1.0",
+    "extrapolate"            : "true",
+    "refinement"             : "1",
+    "meanPressure"           : "true",
+    "viscosity"              : "1"
+}

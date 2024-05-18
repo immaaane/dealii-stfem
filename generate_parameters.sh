@@ -59,7 +59,7 @@ generate_practical_parameters() {
                         testNameSuffix="_rough"
                     fi
                     testName="tests/json/practical${testNameSuffix}_${problem}_${timeType}"
-		    filename=$(python tests/json/generate.py --testName $testName --endTime $T --dim $dim $printTiming $spaceTimeMg $rIsTransposeP $estRelax --timeType $timeType --problemType $problem --nDegCycles $nDegCycles --nRefCycles $nRefCycles --distortCoeff $distortC --feDegree 2  --smoothingSteps $s --refinement 5)
+		                filename=$(python tests/json/generate.py --testName $testName --endTime $T --dim $dim $printTiming $spaceTimeMg $rIsTransposeP $estRelax --timeType $timeType --problemType $problem --nDegCycles $nDegCycles --nRefCycles $nRefCycles --distortCoeff $distortC --feDegree 2  --smoothingSteps $s --refinement 5)
 		    filenames_p+=($filename)
                 done
             done

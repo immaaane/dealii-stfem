@@ -103,24 +103,6 @@ test(dealii::ConditionalOStream &pcout,
           << ":: Number of degrees of freedom: " << dof_handler.n_dofs()
           << "\n";
 
-    // create sparsity pattern
-    SparsityPatternType sparsity_pattern(dof_handler.locally_owned_dofs(),
-                                         dof_handler.locally_owned_dofs(),
-                                         dof_handler.get_communicator());
-    DoFTools::make_sparsity_pattern(dof_handler,
-                                    sparsity_pattern,
-                                    constraints,
-                                    false);
-    sparsity_pattern.compress();
-
-    // create scalar siffness matrix
-    SparseMatrixType K;
-    K.reinit(sparsity_pattern);
-
-    // create scalar mass matrix
-    SparseMatrixType M;
-    M.reinit(sparsity_pattern);
-
     double       time     = 0.;
     double       time_len = parameters.end_time - time;
     unsigned int n_steps  = static_cast<unsigned int>((time_len) / spc_step);
@@ -129,25 +111,12 @@ test(dealii::ConditionalOStream &pcout,
 
     Coefficient<dim> coeff(parameters);
     // matrix-free operators
-    MatrixFreeOperator<dim, Number> K_mf(
+    MatrixFreeOperatorScalar<dim, Number> K_mf(
       mapping, dof_handler, constraints, quad, 0.0, 1.0);
-    MatrixFreeOperator<dim, Number> M_mf(
+    MatrixFreeOperatorScalar<dim, Number> M_mf(
       mapping, dof_handler, constraints, quad, 1.0, 0.0);
     if (!parameters.space_time_conv_test)
       K_mf.evaluate_coefficient(coeff);
-
-    if (false)
-      {
-        MatrixCreator::create_laplace_matrix<dim, dim>(
-          mapping, dof_handler, quad, K, nullptr, constraints);
-        MatrixCreator::create_mass_matrix<dim, dim>(
-          mapping, dof_handler, quad, M, nullptr, constraints);
-      }
-    else
-      {
-        K_mf.compute_system_matrix(K);
-        M_mf.compute_system_matrix(M);
-      }
 
     // We need the case n_timesteps_at_once=1 matrices always for the
     // integration of the source f
@@ -162,8 +131,12 @@ test(dealii::ConditionalOStream &pcout,
 
     FullMatrix<Number> lhs_uK, lhs_uM, rhs_uK, rhs_uM, rhs_vM,
       zero(Gamma.m(), Gamma.n());
-    std::unique_ptr<SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>
-      rhs_matrix, rhs_matrix_v, matrix;
+    using SystemN = SystemMatrix<Number, MatrixFreeOperatorScalar<dim, Number>>;
+    using SystemNP =
+      SystemMatrix<NumberPreconditioner,
+                   MatrixFreeOperatorScalar<dim, NumberPreconditioner>>;
+
+    std::unique_ptr<SystemN> rhs_matrix, rhs_matrix_v, matrix;
     if (parameters.problem == ProblemType::wave)
       {
         auto [Alpha_lhs, Beta_lhs, rhs_uK_, rhs_uM_, rhs_vM_] =
@@ -174,14 +147,13 @@ test(dealii::ConditionalOStream &pcout,
                                    Zeta_1,
                                    n_timesteps_at_once);
 
-        lhs_uK       = Alpha_lhs;
-        lhs_uM       = Beta_lhs;
-        rhs_uK       = rhs_uK_;
-        rhs_uM       = rhs_uM_;
-        rhs_vM       = rhs_vM_;
-        rhs_matrix_v = std::make_unique<
-          SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
-          timer, K_mf, M_mf, zero, rhs_vM);
+        lhs_uK = Alpha_lhs;
+        lhs_uM = Beta_lhs;
+        rhs_uK = rhs_uK_;
+        rhs_uM = rhs_uM_;
+        rhs_vM = rhs_vM_;
+        rhs_matrix_v =
+          std::make_unique<SystemN>(timer, K_mf, M_mf, zero, rhs_vM);
       }
     else
       {
@@ -190,12 +162,8 @@ test(dealii::ConditionalOStream &pcout,
         rhs_uK = is_cgp ? Gamma : zero;
         rhs_uM = is_cgp ? Zeta : Gamma;
       }
-    matrix =
-      std::make_unique<SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
-        timer, K_mf, M_mf, lhs_uK, lhs_uM);
-    rhs_matrix =
-      std::make_unique<SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
-        timer, K_mf, M_mf, rhs_uK, rhs_uM);
+    matrix     = std::make_unique<SystemN>(timer, K_mf, M_mf, lhs_uK, lhs_uM);
+    rhs_matrix = std::make_unique<SystemN>(timer, K_mf, M_mf, rhs_uK, rhs_uM);
 
     /// GMG
     RepartitioningPolicyTools::DefaultPolicy<dim>          policy(true);
@@ -207,10 +175,13 @@ test(dealii::ConditionalOStream &pcout,
     unsigned int n_timesteps_min =
       space_time_mg ? std::max(parameters.n_timesteps_at_once_min, 1) :
                       n_timesteps_at_once;
-    std::vector<TimeMGType> mg_type_level =
+    auto poly_time_sequence = get_poly_mg_sequence(fe_degree,
+                                                   fe_degree_min,
+                                                   parameters.poly_coarsening);
+
+    std::vector<TimeMGType> const mg_type_level =
       get_time_mg_sequence(mg_triangulations.size(),
-                           fe_degree,
-                           fe_degree_min,
+                           poly_time_sequence,
                            n_timesteps_at_once,
                            n_timesteps_min,
                            TimeMGType::k,
@@ -225,37 +196,34 @@ test(dealii::ConditionalOStream &pcout,
           << "\n";
     MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers(
       min_level, max_level);
-    MGLevelObject<
-      std::shared_ptr<const MatrixFreeOperator<dim, NumberPreconditioner>>>
+    MGLevelObject<std::shared_ptr<
+      const MatrixFreeOperatorScalar<dim, NumberPreconditioner>>>
       mg_M_mf(min_level, max_level);
-    MGLevelObject<
-      std::shared_ptr<const MatrixFreeOperator<dim, NumberPreconditioner>>>
+    MGLevelObject<std::shared_ptr<
+      const MatrixFreeOperatorScalar<dim, NumberPreconditioner>>>
       mg_K_mf(min_level, max_level);
     MGLevelObject<
       std::shared_ptr<const AffineConstraints<NumberPreconditioner>>>
       mg_constraints(min_level, max_level);
-    MGLevelObject<std::shared_ptr<
-      const SystemMatrix<NumberPreconditioner,
-                         MatrixFreeOperator<dim, NumberPreconditioner>>>>
-      mg_operators(min_level, max_level);
+    MGLevelObject<std::shared_ptr<const SystemNP>> mg_operators(min_level,
+                                                                max_level);
     MGLevelObject<std::shared_ptr<PreconditionVanka<NumberPreconditioner>>>
       precondition_vanka(min_level, max_level);
     std::vector<std::array<FullMatrix<NumberPreconditioner>, 4>> fetw;
     std::vector<std::array<FullMatrix<NumberPreconditioner>, 5>> fetw_w;
     if (parameters.problem == ProblemType::heat)
-      fetw =
-        get_fe_time_weights<Number, NumberPreconditioner>(parameters.type,
-                                                          fe_degree,
-                                                          time_step_size,
-                                                          n_timesteps_at_once,
-                                                          mg_type_level);
+      fetw = get_fe_time_weights<NumberPreconditioner>(parameters.type,
+                                                       time_step_size,
+                                                       n_timesteps_at_once,
+                                                       mg_type_level,
+                                                       poly_time_sequence);
     else if (parameters.problem == ProblemType::wave)
-      fetw_w = get_fe_time_weights_wave<Number, NumberPreconditioner>(
-        parameters.type,
-        fe_degree,
-        time_step_size,
-        n_timesteps_at_once,
-        mg_type_level);
+      fetw_w =
+        get_fe_time_weights_wave<NumberPreconditioner>(parameters.type,
+                                                       time_step_size,
+                                                       n_timesteps_at_once,
+                                                       mg_type_level,
+                                                       poly_time_sequence);
 
     for (unsigned int l = min_level; l <= max_level; ++l)
       {
@@ -276,10 +244,10 @@ test(dealii::ConditionalOStream &pcout,
 
         // matrix-free operators
         auto K_mf_ =
-          std::make_shared<MatrixFreeOperator<dim, NumberPreconditioner>>(
+          std::make_shared<MatrixFreeOperatorScalar<dim, NumberPreconditioner>>(
             mapping, *dof_handler_, *constraints_, quad, 0.0, 1.0);
         auto M_mf_ =
-          std::make_shared<MatrixFreeOperator<dim, NumberPreconditioner>>(
+          std::make_shared<MatrixFreeOperatorScalar<dim, NumberPreconditioner>>(
             mapping, *dof_handler_, *constraints_, quad, 1.0, 0.0);
         if (!parameters.space_time_conv_test)
           K_mf_->evaluate_coefficient(coeff);
@@ -289,10 +257,8 @@ test(dealii::ConditionalOStream &pcout,
         auto const &lhs_uM_p =
           parameters.problem == ProblemType::heat ? fetw[l][1] : fetw_w[l][1];
 
-        mg_operators[l] = std::make_shared<
-          SystemMatrix<NumberPreconditioner,
-                       MatrixFreeOperator<dim, NumberPreconditioner>>>(
-          timer, *K_mf_, *M_mf_, lhs_uK_p, lhs_uM_p);
+        mg_operators[l] =
+          std::make_shared<SystemNP>(timer, *K_mf_, *M_mf_, lhs_uK_p, lhs_uM_p);
 
         auto sparsity_pattern_ = std::make_shared<SparsityPatternType>(
           dof_handler_->locally_owned_dofs(),
@@ -339,16 +305,13 @@ test(dealii::ConditionalOStream &pcout,
         matrix->initialize_dof_vector(*tmp1);
         matrix->initialize_dof_vector(*tmp2);
       }
-    using Preconditioner =
-      GMG<dim,
-          NumberPreconditioner,
-          SystemMatrix<NumberPreconditioner,
-                       MatrixFreeOperator<dim, NumberPreconditioner>>>;
-    auto preconditioner = std::make_unique<Preconditioner>(timer,
+    using Preconditioner = GMG<dim, NumberPreconditioner, SystemNP>;
+    auto preconditioner  = std::make_unique<Preconditioner>(timer,
                                                            parameters,
                                                            fe_degree,
                                                            n_timesteps_at_once,
                                                            mg_type_level,
+                                                           poly_time_sequence,
                                                            dof_handler,
                                                            mg_dof_handlers,
                                                            mg_constraints,
@@ -393,8 +356,10 @@ test(dealii::ConditionalOStream &pcout,
       rhs_function->set_time(time);
       rhs = 0.0;
       if (parameters.space_time_conv_test)
-        VectorTools::create_right_hand_side(
-          mapping, dof_handler, quad, *rhs_function, rhs, constraints);
+        {
+          VectorTools::create_right_hand_side(
+            mapping, dof_handler, quad, *rhs_function, rhs, constraints);
+        }
     };
     auto evaluate_exact_solution = [&mapping,
                                     &dof_handler,
@@ -500,36 +465,38 @@ test(dealii::ConditionalOStream &pcout,
                                                   *exact_solution,
                                                   evaluate_numerical_solution);
 
-    std::unique_ptr<TimeIntegrator<dim, Number, Preconditioner>> step;
+    std::unique_ptr<TimeIntegrator<dim, Number, Preconditioner, SystemN>> step;
+    using TimeHeat = TimeIntegratorFO<dim, Number, Preconditioner, SystemN>;
+    using TimeWave = TimeIntegratorWave<dim, Number, Preconditioner, SystemN>;
+    std::vector<std::function<void(const double, VectorType &)>>
+      integrate_rhs_function_{integrate_rhs_function};
     if (parameters.problem == ProblemType::heat)
-      step = std::make_unique<TimeIntegratorHeat<dim, Number, Preconditioner>>(
-        parameters.type,
-        fe_degree,
-        Alpha_1,
-        Gamma_1,
-        1.e-12,
-        *matrix,
-        *preconditioner,
-        *rhs_matrix,
-        integrate_rhs_function,
-        n_timesteps_at_once,
-        parameters.extrapolate);
+      step = std::make_unique<TimeHeat>(parameters.type,
+                                        fe_degree,
+                                        Alpha_1,
+                                        Gamma_1,
+                                        1.e-12,
+                                        *matrix,
+                                        *preconditioner,
+                                        *rhs_matrix,
+                                        integrate_rhs_function_,
+                                        n_timesteps_at_once,
+                                        parameters.extrapolate);
     else
-      step = std::make_unique<TimeIntegratorWave<dim, Number, Preconditioner>>(
-        parameters.type,
-        fe_degree,
-        Alpha_1,
-        Beta_1,
-        Gamma_1,
-        Zeta_1,
-        1.e-12,
-        *matrix,
-        *preconditioner,
-        *rhs_matrix,
-        *rhs_matrix_v,
-        integrate_rhs_function,
-        n_timesteps_at_once,
-        parameters.extrapolate);
+      step = std::make_unique<TimeWave>(parameters.type,
+                                        fe_degree,
+                                        Alpha_1,
+                                        Beta_1,
+                                        Gamma_1,
+                                        Zeta_1,
+                                        1.e-12,
+                                        *matrix,
+                                        *preconditioner,
+                                        *rhs_matrix,
+                                        *rhs_matrix_v,
+                                        integrate_rhs_function_,
+                                        n_timesteps_at_once,
+                                        parameters.extrapolate);
 
     // interpolate initial value
     evaluate_exact_solution(0, x.block(x.n_blocks() - 1));
@@ -636,15 +603,12 @@ test(dealii::ConditionalOStream &pcout,
                         << std::endl;
         prev_x = x.block(x.n_blocks() - 1);
         if (parameters.problem == ProblemType::heat)
-          static_cast<TimeIntegratorHeat<dim, Number, Preconditioner> const *>(
-            step.get())
+          static_cast<TimeHeat const *>(step.get())
             ->solve(x, prev_x, timestep_number, time, time_step_size);
         else
           {
             prev_v = v.block(v.n_blocks() - 1);
-            static_cast<
-              TimeIntegratorWave<dim, Number, Preconditioner> const *>(
-              step.get())
+            static_cast<TimeWave const *>(step.get())
               ->solve(
                 x, v, prev_x, prev_v, timestep_number, time, time_step_size);
           }
@@ -754,15 +718,9 @@ main(int argc, char **argv)
   Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
   dealii::ConditionalOStream       pcout(
     std::cout, dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0);
-  std::string filename =
-    "proc" +
-    std::to_string(dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD)) +
-    ".log";
-  std::ofstream pout(filename);
-  dealii::deallog.attach(pout);
-  dealii::deallog.depth_console(0);
   MPI_Comm    comm               = MPI_COMM_WORLD;
   std::string file               = "default";
+  std::string log_file_prefix    = "proc";
   int         dim                = 2;
   bool        precondition_float = true;
   {
@@ -771,7 +729,20 @@ main(int argc, char **argv)
     clo.insert(file, "file", arg_t::required, 'f', "Path to parameterfile");
     clo.insert(dim, "dim", arg_t::required, 'd', "Spatial dimensions");
     clo.insert(precondition_float, "precondition_float", arg_t::none, 'p');
+    clo.insert(log_file_prefix,
+               "log_prefix",
+               util::arg_type::required,
+               'l',
+               "prefix of the log file, default is 'proc'");
   }
+  std::string filename =
+    log_file_prefix + file +
+    std::to_string(dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD)) +
+    ".log";
+  std::ofstream pout(filename);
+  dealii::deallog.attach(pout);
+  dealii::deallog.depth_console(0);
+
   auto tst = [&](std::string file_name) {
     if (precondition_float)
       test<double, float>(pcout, comm, file_name, dim);

@@ -18,25 +18,25 @@ namespace dealii
    * we would need a few extensions in order to integrate nonlinear terms
    * accurately.
    */
-  template <int dim, typename Number, typename Preconditioner>
+  template <int dim, typename Number, typename Preconditioner, typename System>
   class TimeIntegrator
   {
   public:
     using VectorType      = VectorT<Number>;
     using BlockVectorType = BlockVectorT<Number>;
 
-    TimeIntegrator(
-      TimeStepType              type_,
-      unsigned int              time_degree_,
-      FullMatrix<Number> const &Alpha_,
-      FullMatrix<Number> const &Gamma_,
-      double const              gmres_tolerance_,
-      SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix_,
-      Preconditioner const &preconditioner_,
-      SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix_,
-      std::function<void(const double, VectorType &)> integrate_rhs_function,
-      unsigned int                                    n_timesteps_at_once_,
-      bool                                            extrapolate_)
+    TimeIntegrator(TimeStepType              type_,
+                   unsigned int              time_degree_,
+                   FullMatrix<Number> const &Alpha_,
+                   FullMatrix<Number> const &Gamma_,
+                   double const              gmres_tolerance_,
+                   System const             &matrix_,
+                   Preconditioner const     &preconditioner_,
+                   System const             &rhs_matrix_,
+                   std::vector<std::function<void(const double, VectorType &)>>
+                                integrate_rhs_function,
+                   unsigned int n_timesteps_at_once_,
+                   bool         extrapolate_)
       : type(type_)
       , time_degree(time_degree_)
       , Alpha(Alpha_)
@@ -48,6 +48,10 @@ namespace dealii
       , rhs_matrix(rhs_matrix_)
       , integrate_rhs_function(integrate_rhs_function)
       , n_timesteps_at_once(n_timesteps_at_once_)
+      , idx(n_timesteps_at_once,
+            Alpha.m() /
+              (type == TimeStepType::DG ? time_degree + 1 : time_degree),
+            (type == TimeStepType::DG ? time_degree + 1 : time_degree))
       , do_extrapolate(extrapolate_)
     {
       if (type == TimeStepType::DG)
@@ -62,28 +66,32 @@ namespace dealii
                    double const     time,
                    double const     time_step) const
     {
-      VectorType tmp;
-      matrix.initialize_dof_vector(tmp);
+      BlockVectorType tmp(integrate_rhs_function.size());
+      for (unsigned int i = 0; i < integrate_rhs_function.size(); ++i)
+        matrix.initialize_dof_vector(tmp.block(i), i);
 
-      for (unsigned int it = 0; it < n_timesteps_at_once; ++it)
-        for (unsigned int j = 0; j < quad_time.size(); ++j)
-          {
-            double time_ =
-              time + time_step * it + time_step * quad_time.point(j)[0];
-            integrate_rhs_function(time_, tmp);
-            /// Here we exploit that Alpha is a diagonal matrix
-            if (type == TimeStepType::DG)
-              rhs.block(j + it * Alpha.m()).add(Alpha(j, j), tmp);
-            else
-              {
-                if (j == 0)
-                  for (unsigned int i = 0; i < Gamma.m(); ++i)
-                    rhs.block(i + it * Alpha.m()).add(-Gamma(i, 0), tmp);
-                else
-                  rhs.block(j - 1 + it * Alpha.m())
-                    .add(Alpha(j - 1, j - 1), tmp);
-              }
-          }
+      for (unsigned int iv = 0; iv < idx.n_variables(); ++iv)
+        for (unsigned int it = 0; it < idx.n_timesteps_at_once(); ++it)
+          for (unsigned int j = 0; j < quad_time.size(); ++j)
+            {
+              double time_ =
+                time + time_step * it + time_step * quad_time.point(j)[0];
+              integrate_rhs_function[iv](time_, tmp.block(iv));
+              /// Here we exploit that Alpha is a diagonal matrix
+              if (type == TimeStepType::DG)
+                rhs.block(idx(it, iv, j))
+                  .add(Alpha(idx(0, iv, j), idx(0, iv, j)), tmp.block(iv));
+              else
+                {
+                  if (j == 0)
+                    for (unsigned int i = 0; i < idx.n_timedofs(); ++i)
+                      rhs.block(idx(it, iv, i))
+                        .add(-Gamma(idx(0, iv, i), 0), tmp.block(iv));
+                  else
+                    rhs.block(idx(it, iv, j - 1))
+                      .add(Alpha(j - 1, j - 1), tmp.block(iv));
+                }
+            }
     }
 
     unsigned int
@@ -94,13 +102,15 @@ namespace dealii
 
   protected:
     void
-    extrapolate(BlockVectorType &x, VectorType const &prev_x) const
+    extrapolate(BlockVectorType &x, BlockVectorType const &prev_x) const
     {
-      for (unsigned int j = 0; j < x.n_blocks(); ++j)
-        if (do_extrapolate)
-          x.block(j) = prev_x;
-        else
-          x.block(j) = 0.0;
+      for (unsigned int it = 0; it < idx.n_timesteps_at_once(); ++it)
+        for (unsigned int i = 0; i < idx.n_variables(); ++i)
+          for (unsigned int j = 0; j < idx.n_timedofs(); ++j)
+            if (do_extrapolate)
+              x.block(idx(it, i, j)) = prev_x.block(i);
+            else
+              x.block(idx(it, i, j)) = 0.0;
     }
 
     TimeStepType              type;
@@ -109,62 +119,83 @@ namespace dealii
     FullMatrix<Number> const &Alpha;
     FullMatrix<Number> const &Gamma;
 
-    mutable ReductionControl                                     solver_control;
-    mutable SolverFGMRES<BlockVectorType>                        solver;
-    Preconditioner const                                        &preconditioner;
-    SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix;
-    SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix;
-    std::function<void(const double, VectorType &)> integrate_rhs_function;
-    unsigned int                                    n_timesteps_at_once;
-    bool                                            do_extrapolate;
+    mutable ReductionControl              solver_control;
+    mutable SolverFGMRES<BlockVectorType> solver;
+    Preconditioner const                 &preconditioner;
+    System const                         &matrix;
+    System const                         &rhs_matrix;
+    std::vector<std::function<void(const double, VectorType &)>>
+                   integrate_rhs_function;
+    unsigned int   n_timesteps_at_once;
+    block_indexing idx;
+
+    bool do_extrapolate;
   };
 
 
-  template <int dim, typename Number, typename Preconditioner>
-  class TimeIntegratorHeat : public TimeIntegrator<dim, Number, Preconditioner>
+  template <int dim, typename Number, typename Preconditioner, typename System>
+  class TimeIntegratorFO
+    : public TimeIntegrator<dim, Number, Preconditioner, System>
   {
   public:
     using VectorType =
-      typename TimeIntegrator<dim, Number, Preconditioner>::VectorType;
+      typename TimeIntegrator<dim, Number, Preconditioner, System>::VectorType;
     using BlockVectorType =
-      typename TimeIntegrator<dim, Number, Preconditioner>::BlockVectorType;
+      typename TimeIntegrator<dim, Number, Preconditioner, System>::
+        BlockVectorType;
 
-    TimeIntegratorHeat(
+    TimeIntegratorFO(
       TimeStepType              type_,
       unsigned int              time_degree_,
       FullMatrix<Number> const &Alpha_,
       FullMatrix<Number> const &Gamma_,
       double const              gmres_tolerance_,
-      SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix_,
-      Preconditioner const &preconditioner_,
-      SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix_,
-      std::function<void(const double, VectorType &)> integrate_rhs_function,
-      unsigned int                                    n_timesteps_at_once_,
-      bool                                            extrapolate = true)
-      : TimeIntegrator<dim, Number, Preconditioner>(type_,
-                                                    time_degree_,
-                                                    Alpha_,
-                                                    Gamma_,
-                                                    gmres_tolerance_,
-                                                    matrix_,
-                                                    preconditioner_,
-                                                    rhs_matrix_,
-                                                    integrate_rhs_function,
-                                                    n_timesteps_at_once_,
-                                                    extrapolate)
+      System const             &matrix_,
+      Preconditioner const     &preconditioner_,
+      System const             &rhs_matrix_,
+      std::vector<std::function<void(const double, VectorType &)>>
+                   integrate_rhs_function,
+      unsigned int n_timesteps_at_once_,
+      bool         extrapolate = true)
+      : TimeIntegrator<dim, Number, Preconditioner, System>(
+          type_,
+          time_degree_,
+          Alpha_,
+          Gamma_,
+          gmres_tolerance_,
+          matrix_,
+          preconditioner_,
+          rhs_matrix_,
+          integrate_rhs_function,
+          n_timesteps_at_once_,
+          extrapolate)
     {}
 
     void
     solve(BlockVectorType                    &x,
-          VectorType const                   &prev_x,
+          const VectorType                   &prev_x,
+          [[maybe_unused]] const unsigned int timestep_number,
+          const double                        time,
+          const double                        time_step) const
+    {
+      BlockVectorType prev_x_(1);
+      prev_x_.block(0).swap(const_cast<VectorType &>(prev_x));
+      this->solve(x, prev_x_, timestep_number, time, time_step);
+      prev_x_.block(0).swap(const_cast<VectorType &>(prev_x));
+    }
+
+    void
+    solve(BlockVectorType                    &x,
+          BlockVectorType                    &prev_x,
           [[maybe_unused]] const unsigned int timestep_number,
           const double                        time,
           const double                        time_step) const
     {
       BlockVectorType rhs(x.n_blocks());
       for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
-        this->matrix.initialize_dof_vector(rhs.block(j));
-      this->rhs_matrix.vmult(rhs, prev_x);
+        rhs.block(j).reinit(x.block(j).get_partitioner());
+      // this->matrix.initialize_dof_vector(rhs.block(j));
+      this->rhs_matrix.vmult_slice(rhs, prev_x);
 
       this->assemble_force(rhs, time, time_step);
 
@@ -180,14 +211,16 @@ namespace dealii
     }
   };
 
-  template <int dim, typename Number, typename Preconditioner>
-  class TimeIntegratorWave : public TimeIntegrator<dim, Number, Preconditioner>
+  template <int dim, typename Number, typename Preconditioner, typename System>
+  class TimeIntegratorWave
+    : public TimeIntegrator<dim, Number, Preconditioner, System>
   {
   public:
     using VectorType =
-      typename TimeIntegrator<dim, Number, Preconditioner>::VectorType;
+      typename TimeIntegrator<dim, Number, Preconditioner, System>::VectorType;
     using BlockVectorType =
-      typename TimeIntegrator<dim, Number, Preconditioner>::BlockVectorType;
+      typename TimeIntegrator<dim, Number, Preconditioner, System>::
+        BlockVectorType;
 
     TimeIntegratorWave(
       TimeStepType              type_,
@@ -197,25 +230,26 @@ namespace dealii
       FullMatrix<Number> const &Gamma_,
       FullMatrix<Number> const &Zeta_,
       double const              gmres_tolerance_,
-      SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &matrix_,
-      Preconditioner const &preconditioner_,
-      SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix_,
-      SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const
-                                                     &rhs_matrix_v_,
-      std::function<void(const double, VectorType &)> integrate_rhs_function,
-      unsigned int                                    n_timesteps_at_once_,
-      bool                                            extrapolate = true)
-      : TimeIntegrator<dim, Number, Preconditioner>(type_,
-                                                    time_degree_,
-                                                    Alpha_,
-                                                    Gamma_,
-                                                    gmres_tolerance_,
-                                                    matrix_,
-                                                    preconditioner_,
-                                                    rhs_matrix_,
-                                                    integrate_rhs_function,
-                                                    n_timesteps_at_once_,
-                                                    extrapolate)
+      System const             &matrix_,
+      Preconditioner const     &preconditioner_,
+      System const             &rhs_matrix_,
+      System const             &rhs_matrix_v_,
+      std::vector<std::function<void(const double, VectorType &)>>
+                   integrate_rhs_function,
+      unsigned int n_timesteps_at_once_,
+      bool         extrapolate = true)
+      : TimeIntegrator<dim, Number, Preconditioner, System>(
+          type_,
+          time_degree_,
+          Alpha_,
+          Gamma_,
+          gmres_tolerance_,
+          matrix_,
+          preconditioner_,
+          rhs_matrix_,
+          integrate_rhs_function,
+          n_timesteps_at_once_,
+          extrapolate)
       , rhs_matrix_v(rhs_matrix_v_)
       , Beta(Beta_)
       , Zeta(Zeta_)
@@ -247,11 +281,18 @@ namespace dealii
       for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
         this->matrix.initialize_dof_vector(rhs.block(j));
 
-      this->rhs_matrix.vmult(rhs, prev_u);
-      this->rhs_matrix_v.vmult_add(rhs, prev_v);
+      BlockVectorType prev_(1);
+      prev_.block(0).swap(const_cast<VectorType &>(prev_u));
+      this->rhs_matrix.vmult_slice(rhs, prev_);
+      this->extrapolate(u, prev_);
+      prev_.block(0).swap(const_cast<VectorType &>(prev_u));
+
+      prev_.block(0).swap(const_cast<VectorType &>(prev_v));
+      this->rhs_matrix_v.vmult_slice_add(rhs, prev_);
+      prev_.block(0).swap(const_cast<VectorType &>(prev_v));
+
       this->assemble_force(rhs, time, time_step);
 
-      this->extrapolate(u, prev_u);
       try
         {
           this->solver.solve(this->matrix, u, rhs, this->preconditioner);
@@ -280,7 +321,7 @@ namespace dealii
     }
 
   private:
-    SystemMatrix<Number, MatrixFreeOperator<dim, Number>> const &rhs_matrix_v;
+    System const &rhs_matrix_v;
 
     FullMatrix<Number> const &Beta;
     FullMatrix<Number> const &Zeta;

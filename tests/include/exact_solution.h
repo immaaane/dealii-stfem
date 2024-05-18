@@ -19,12 +19,12 @@ template <int dim, typename Number>
 class ExactSolution : public Function<dim, Number>
 {
 public:
-  ExactSolution(double f_ = 1.0)
+  ExactSolution(Number f_ = 1.0)
     : Function<dim, Number>()
     , f(f_)
   {}
 
-  double
+  Number
   value(Point<dim> const &x, unsigned int const) const override final
   {
     Number value = sin(2 * PI * f * this->get_time());
@@ -32,11 +32,11 @@ public:
       value *= sin(2 * PI * f * x[i]);
     return value;
   }
-  Tensor<1, dim>
+  Tensor<1, dim, Number>
   gradient(const Point<dim> &x, const unsigned int) const override final
   {
-    Tensor<1, dim> grad;
-    double         tv = 2 * PI * f * sin(2 * PI * f * this->get_time());
+    Tensor<1, dim, Number> grad;
+    Number                 tv = 2 * PI * f * sin(2 * PI * f * this->get_time());
     for (unsigned int i = 0; i < dim; ++i)
       {
         grad[i] = tv;
@@ -47,19 +47,19 @@ public:
   }
 
 private:
-  double const f;
+  Number const f;
 };
 
 template <int dim, typename Number>
 class RHSFunction : public Function<dim, Number>
 {
 public:
-  RHSFunction(double f_ = 1.0)
+  RHSFunction(Number f_ = 1.0)
     : Function<dim, Number>()
     , f(f_)
   {}
 
-  double
+  Number
   value(Point<dim> const &x, unsigned int const) const override final
   {
     Number value =
@@ -71,7 +71,7 @@ public:
   }
 
 private:
-  double const f;
+  Number const f;
 };
 
 template <int dim, typename Number>
@@ -82,13 +82,13 @@ public:
     : Function<dim>()
   {}
 
-  virtual double
+  virtual Number
   value(const Point<dim> &p, const unsigned int) const override
   {
-    const double x = p[0];
-    const double y = dim >= 2 ? p[1] : 0.0;
-    const double z = dim >= 3 ? p[2] : 0.0;
-    const double t = this->get_time();
+    const Number x = p[0];
+    const Number y = dim >= 2 ? p[1] : 0.0;
+    const Number z = dim >= 3 ? p[2] : 0.0;
+    const Number t = this->get_time();
 
     if (dim == 2)
       return sin(2 * PI * x) * sin(2 * PI * y) *
@@ -112,13 +112,13 @@ public:
     : Function<dim>()
   {}
 
-  virtual double
+  virtual Number
   value(const Point<dim> &p, const unsigned int) const override
   {
-    const double x = p[0];
-    const double y = dim >= 2 ? p[1] : 0.0;
-    const double z = dim >= 3 ? p[2] : 0.0;
-    const double t = this->get_time();
+    const Number x = p[0];
+    const Number y = dim >= 2 ? p[1] : 0.0;
+    const Number z = dim >= 3 ? p[2] : 0.0;
+    const Number t = this->get_time();
 
     if (dim == 2)
       return sin(2 * PI * x) * sin(2 * PI * y) * (1 + sin(PI * t)) *
@@ -143,37 +143,37 @@ namespace wave
   class ExactSolutionV : public Function<dim, Number>
   {
   public:
-    ExactSolutionV(double f_ = 1.0)
+    ExactSolutionV(Number f_ = 1.0)
       : Function<dim, Number>()
       , f(f_)
     {}
 
-    double
+    Number
     value(Point<dim> const &x, unsigned int const) const override final
     {
-      double value = 2 * PI * f * cos(2 * PI * f * this->get_time());
+      Number value = 2 * PI * f * cos(2 * PI * f * this->get_time());
       for (unsigned int i = 0; i < dim; ++i)
         value *= sin(2 * PI * f * x[i]);
       return value;
     }
 
   private:
-    double const f;
+    Number const f;
   };
 
   template <int dim, typename Number>
   class RHSFunction : public Function<dim, Number>
   {
   public:
-    RHSFunction(double f_ = 1.0)
+    RHSFunction(Number f_ = 1.0)
       : Function<dim, Number>()
       , f(f_)
     {}
 
-    double
+    Number
     value(Point<dim> const &x, unsigned int const) const override final
     {
-      double value =
+      Number value =
         pow(2.0, dim) * pow(PI * f, 2) * sin(2 * PI * f * this->get_time());
       for (unsigned int i = 0; i < dim; ++i)
         value *= sin(2 * PI * f * x[i]);
@@ -181,10 +181,138 @@ namespace wave
     }
 
   private:
-    double const f;
+    Number const f;
   };
 
 } // namespace wave
+
+namespace stokes
+{
+  template <int dim, typename Number>
+  class ExactSolutionU : public Function<dim, Number>
+  {
+  public:
+    ExactSolutionU()
+      : Function<dim, Number>(2)
+    {}
+
+    Number
+    value(Point<dim> const  &x,
+          unsigned int const component) const override final
+    {
+      Number sin_t    = sin(this->get_time());
+      Number sin_PI_x = sin(PI * x(0)), sin_PI_y = sin(PI * x(1));
+      Number cos_PI_x = cos(PI * x(0)), cos_PI_y = cos(PI * x(1));
+      if (component == 0)
+        return cos_PI_y * sin_t * sin_PI_x * sin_PI_x * sin_PI_y;
+      if (component == 1)
+        return -cos_PI_x * sin_t * sin_PI_x * sin_PI_y * sin_PI_y;
+      return 0.0;
+    }
+    Tensor<1, dim, Number>
+    gradient(const Point<dim>  &x,
+             const unsigned int component) const override final
+    {
+      Tensor<1, dim, Number> grad;
+      Number                 sin_t = sin(this->get_time());
+      Number sin_PI_x = sin(PI * x(0)), sin_PI_y = sin(PI * x(1));
+      Number cos_PI_x = cos(PI * x(0)), cos_PI_y = cos(PI * x(1));
+      Number PI_sin_t = PI * sin_t;
+      if (component == 0)
+        {
+          grad[0] = 2 * PI_sin_t * cos_PI_x * sin_PI_x * cos_PI_y * sin_PI_y;
+          grad[1] = PI_sin_t * (sin_PI_x * sin_PI_x * cos_PI_y * cos_PI_y -
+                                sin_PI_x * sin_PI_x * sin_PI_y * sin_PI_y);
+        }
+      else if (component == 1)
+        {
+          grad[0] = PI_sin_t * (sin_PI_x * sin_PI_x - cos_PI_x * cos_PI_x) *
+                    sin_PI_y * sin_PI_y;
+          grad[1] = -2 * PI_sin_t * cos_PI_x * sin_PI_x * cos_PI_y * sin_PI_y;
+        }
+      return grad;
+    }
+  };
+
+
+  template <int dim, typename Number>
+  class ExactSolutionP : public Function<dim, Number>
+  {
+  public:
+    ExactSolutionP()
+      : Function<dim, Number>()
+    {}
+
+    Number
+    value(Point<dim> const &x, unsigned int const) const override final
+    {
+      Number sin_t    = sin(this->get_time());
+      Number sin_PI_x = sin(PI * x(0)), sin_PI_y = sin(PI * x(1)),
+             cos_PI_x = cos(PI * x(0)), cos_PI_y = cos(PI * x(1));
+      return cos_PI_x * cos_PI_y * sin_t * sin_PI_x * sin_PI_y;
+    }
+    Tensor<1, dim, Number>
+    gradient(const Point<dim> &x, const unsigned int) const override final
+    {
+      Tensor<1, dim, Number> grad;
+      Number sin_PI_x = sin(PI * x(0)), sin_PI_y = sin(PI * x(1)),
+             cos_PI_x = cos(PI * x(0)), cos_PI_y = cos(PI * x(1)),
+             PI_sin_t = PI * sin(this->get_time());
+      grad[0]         = PI_sin_t * (cos_PI_x * cos_PI_x - sin_PI_x * sin_PI_x) *
+                cos_PI_y * sin_PI_y;
+      grad[1] = PI_sin_t * (cos_PI_y * cos_PI_y - sin_PI_y * sin_PI_y) *
+                cos_PI_x * sin_PI_x;
+      return grad;
+    }
+  };
+
+  template <int dim, typename Number>
+  class RHSFunction : public Function<dim, Number>
+  {
+  public:
+    RHSFunction(Number viscosity_, bool navier = false)
+      : Function<dim, Number>(2)
+      , viscosity(viscosity_)
+      , nonlinear_factor(navier ? 1.0 : 0.0)
+    {}
+
+    Number
+    value(Point<dim> const  &x,
+          unsigned int const component) const override final
+    {
+      Number sin_t    = sin(this->get_time());
+      Number cos_t    = cos(this->get_time());
+      Number sin_PI_x = sin(PI * x(0));
+      Number sin_PI_y = sin(PI * x(1));
+      Number cos_PI_x = cos(PI * x(0));
+      Number cos_PI_y = cos(PI * x(1));
+
+      if (component == 0)
+        return sin_PI_y *
+               (PI * (1.0 - 2.0 * PI * viscosity) * cos_PI_x * cos_PI_x *
+                  cos_PI_y * sin_t +
+                cos_PI_y *
+                  (cos_t + PI * (-1.0 + 6.0 * PI * viscosity) * sin_t) *
+                  sin_PI_x * sin_PI_x +
+                nonlinear_factor * PI * cos_PI_x * sin_t * sin_t * sin_PI_x *
+                  sin_PI_x * sin_PI_x * sin_PI_y);
+      else if (component == 1)
+        return sin_PI_x * (nonlinear_factor * PI * cos_PI_y * sin_t * sin_t *
+                             sin_PI_x * sin_PI_y * sin_PI_y * sin_PI_y +
+                           cos_PI_x * (PI *
+                                         (-2.0 * PI * viscosity +
+                                          (1.0 + 4.0 * PI * viscosity) *
+                                            cos(2.0 * PI * x(1))) *
+                                         sin_t -
+                                       cos_t * sin_PI_y * sin_PI_y));
+      return 0;
+    }
+
+  private:
+    Number viscosity        = 1.;
+    Number nonlinear_factor = 1.;
+  };
+} // namespace stokes
 
 template <int dim, typename Number>
 class ErrorCalculator
