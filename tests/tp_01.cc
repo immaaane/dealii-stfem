@@ -222,12 +222,6 @@ test(dealii::ConditionalOStream &pcout,
           << "\n";
     MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers(
       min_level, max_level);
-    MGLevelObject<std::shared_ptr<const SparsityPatternType>>
-      mg_sparsity_patterns(min_level, max_level);
-    MGLevelObject<std::shared_ptr<const SparseMatrixType>> mg_M(min_level,
-                                                                max_level);
-    MGLevelObject<std::shared_ptr<const SparseMatrixType>> mg_K(min_level,
-                                                                max_level);
     MGLevelObject<
       std::shared_ptr<const MatrixFreeOperator<dim, NumberPreconditioner>>>
       mg_M_mf(min_level, max_level);
@@ -315,19 +309,16 @@ test(dealii::ConditionalOStream &pcout,
         M_mf_->compute_system_matrix(*M_);
 
         // matrix->attach(*mg_operators[l]);
-        mg_sparsity_patterns[l] = sparsity_pattern_;
-        mg_M_mf[l]              = M_mf_;
-        mg_K_mf[l]              = K_mf_;
-        mg_M[l]                 = M_;
-        mg_K[l]                 = K_;
-        mg_dof_handlers[l]      = dof_handler_;
-        mg_constraints[l]       = constraints_;
+        mg_M_mf[l]         = M_mf_;
+        mg_K_mf[l]         = K_mf_;
+        mg_dof_handlers[l] = dof_handler_;
+        mg_constraints[l]  = constraints_;
         precondition_vanka[l] =
           std::make_shared<PreconditionVanka<NumberPreconditioner>>(
             timer,
-            mg_K[l],
-            mg_M[l],
-            mg_sparsity_patterns[l],
+            K_,
+            M_,
+            sparsity_pattern_,
             lhs_uK_p,
             lhs_uM_p,
             mg_dof_handlers[l]);
