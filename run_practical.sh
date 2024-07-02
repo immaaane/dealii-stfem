@@ -5,7 +5,7 @@ types="DG CGP"
 distortCoeffs="0.0 0.6"
 
 # Run the function and store the output filenames
-generate_practical_parameters "wave" "$types" "$distortCoeffs"
+generate_practical_parameters "wave" "$types" "$distortCoeffs" "1 2"
 
 source ./submit_job_postprocess.sh
 

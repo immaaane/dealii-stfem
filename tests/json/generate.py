@@ -38,6 +38,7 @@ def run_instance(options, subdivisions, source_point, lower_left, upper_right):
     datastore["hyperRectLowerLeft"] = lower_left
     datastore["hyperRectUpperRight"] = upper_right
     datastore["smoothingDegree"] = options.smoothingDegree
+    datastore["smoothingSteps"] = options.smoothingSteps;
     datastore["estimateRelaxation"] = options.estimateRelaxation
     datastore["coarseGridSmootherType"] = options.coarseGridSmootherType
     datastore["coarseGridMaxiter"] = options.coarseGridMaxiter
@@ -79,6 +80,7 @@ def parseArguments():
     parser.add_argument("--distortCoeff", type=float, default=0.0);
     parser.add_argument("--endTime", type=float, default=1.0);
     parser.add_argument("--smoothingDegree", type=int, default=5);
+    parser.add_argument("--smoothingSteps", type=int, default=1);
     parser.add_argument("--estimateRelaxation", action="store_true");
     parser.add_argument("--coarseGridSmootherType", default="Smoother");
     parser.add_argument("--coarseGridMaxiter", type=int, default=10);

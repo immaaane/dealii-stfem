@@ -541,6 +541,7 @@ namespace dealii
     double       smoothing_range               = 1;
     unsigned int smoothing_degree              = 5;
     unsigned int smoothing_eig_cg_n_iterations = 20;
+    unsigned int smoothing_steps               = 1;
 
     bool estimate_relaxation = true;
 
@@ -615,6 +616,7 @@ namespace dealii
       prm.add_parameter("endTime", end_time);
 
       prm.add_parameter("smoothingDegree", mg_data.smoothing_degree);
+      prm.add_parameter("smoothingSteps", mg_data.smoothing_steps);
       prm.add_parameter("estimateRelaxation", mg_data.estimate_relaxation);
       prm.add_parameter("coarseGridSmootherType",
                         mg_data.coarse_grid_smoother_type);
@@ -713,7 +715,7 @@ namespace dealii
       for (unsigned int level = min_level; level <= max_level; ++level)
         {
           smoother_data[level].preconditioner = precondition_vanka[level];
-          smoother_data[level].n_iterations   = 1;
+          smoother_data[level].n_iterations   = additional_data.smoothing_steps;
           smoother_data[level].relaxation =
             additional_data.estimate_relaxation ? estimate_relaxation(level) :
                                                   1.0;
