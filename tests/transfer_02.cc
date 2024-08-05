@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Copyright (C) 2024 by Nils Margenberg and Peter Munch
+
 #include "include/fe_time.h"
 
 using namespace dealii;
