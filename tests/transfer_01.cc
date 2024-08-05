@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Copyright (C) 2024 by Nils Margenberg and Peter Munch
+
 #include <deal.II/base/conditional_ostream.h>
 #include <deal.II/base/convergence_table.h>
 #include <deal.II/base/quadrature_lib.h>
