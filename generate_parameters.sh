@@ -27,7 +27,7 @@ generate_convergence_parameters() {
                         testNameSuffix="_distort"
                     fi
                     testName="tests/json/convergence${testNameSuffix}_${problem}_${timeType}"
-                    filename=$(python tests/json/generate.py --testName $testName --dim $dim $printTiming $spaceTimeMg $rIsTransposeP $estRelax --timeType $timeType --problemType $problem --nDegCycles $nDegCycles --nRefCycles $nRefCycles --frequency $frequency $spaceTimeConvergenceTest $extrapolate --distortGrid $distortGrid --feDegree 2 --smoothingSteps $s --variable)
+                    filename=$(python tests/json/generate.py --testName $testName --dim $dim $printTiming $spaceTimeMg $rIsTransposeP $estRelax --timeType $timeType --problemType $problem --nDegCycles $nDegCycles --nRefCycles $nRefCycles --frequency $frequency $spaceTimeConvergenceTest $extrapolate --distortGrid $distortGrid --feDegree 2 --smoothingSteps $s)
                     filenames_c+=($filename)
                 done
             done
@@ -41,9 +41,9 @@ generate_practical_parameters() {
     local distortCoeffs="$3"
     local sms="$4"
     local dim=3
-    local nDegCycles=5
-
-    local nRefCycles=5
+    local nDegCycles=3
+    local T=2
+    local nRefCycles=2
     local doOutput="--doOutput"
     local printTiming="--printTiming"
     local spaceTimeMg="--spaceTimeMg"
@@ -59,8 +59,8 @@ generate_practical_parameters() {
                         testNameSuffix="_rough"
                     fi
                     testName="tests/json/practical${testNameSuffix}_${problem}_${timeType}"
-                    filename=$(python tests/json/generate.py --testName $testName --dim $dim $printTiming $spaceTimeMg $rIsTransposeP $estRelax --timeType $timeType --problemType $problem --nDegCycles $nDegCycles --nRefCycles $nRefCycles --distortCoeff $distortC --feDegree 3 --smoothingSteps $s --variable)
-                    filenames_p+=($filename)
+		    filename=$(python tests/json/generate.py --testName $testName --endTime $T --dim $dim $printTiming $spaceTimeMg $rIsTransposeP $estRelax --timeType $timeType --problemType $problem --nDegCycles $nDegCycles --nRefCycles $nRefCycles --distortCoeff $distortC --feDegree 2  --smoothingSteps $s --refinement 5)
+		    filenames_p+=($filename)
                 done
             done
         done

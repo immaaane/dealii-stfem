@@ -6,7 +6,7 @@ types="DG CGP"
 distortGrids="0.0 0.15"
 
 # Run the function and store the output filenames
-generate_convergence_parameters "$problems" "$types" "$distortGrids"
+generate_convergence_parameters "$problems" "$types" "$distortGrids" "1"
 
 source ./submit_job_postprocess.sh
 
