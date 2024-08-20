@@ -185,6 +185,7 @@ test(dealii::ConditionalOStream &pcout,
                            n_timesteps_at_once,
                            n_timesteps_min,
                            TimeMGType::k,
+                           parameters.coarsening_type,
                            time_before_space);
     mg_triangulations =
       get_space_time_triangulation(mg_type_level, mg_triangulations);
@@ -308,7 +309,6 @@ test(dealii::ConditionalOStream &pcout,
     using Preconditioner = GMG<dim, NumberPreconditioner, SystemNP>;
     auto preconditioner  = std::make_unique<Preconditioner>(timer,
                                                            parameters,
-                                                           fe_degree,
                                                            n_timesteps_at_once,
                                                            mg_type_level,
                                                            poly_time_sequence,

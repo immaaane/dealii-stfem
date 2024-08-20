@@ -148,6 +148,7 @@ main()
   test2(TimeStepType::DG, 1, 4);
   test2(TimeStepType::DG, 2, 4);
 
+  test3(TimeStepType::DG, 0, 1);
   test3(TimeStepType::CGP, 1, 1);
   test3(TimeStepType::DG, 1, 1);
   test3(TimeStepType::CGP, 2, 1);

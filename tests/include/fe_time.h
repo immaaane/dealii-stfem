@@ -87,12 +87,14 @@ namespace dealii
   }
 
   inline std::vector<TimeMGType>
-  get_time_mg_sequence(unsigned int const        n_sp_lvl,
-                       std::vector<unsigned int> k_seq,
-                       unsigned int const        n_timesteps_at_once,
-                       unsigned int const        n_timesteps_at_once_min = 1,
-                       TimeMGType const          lower_lvl = TimeMGType::k,
-                       bool                      time_before_space = false)
+  get_time_mg_sequence(
+    unsigned int const        n_sp_lvl,
+    std::vector<unsigned int> k_seq,
+    unsigned int const        n_timesteps_at_once,
+    unsigned int const        n_timesteps_at_once_min = 1,
+    TimeMGType                lower_lvl               = TimeMGType::k,
+    CoarseningType            coarsening_type = CoarseningType::space_and_time,
+    bool                      time_before_space = false)
   {
     Assert(n_sp_lvl >= 1, ExcLowerRange(n_sp_lvl, 1));
     Assert(k_seq.size() >= 1, ExcLowerRange(k_seq.size(), 1));
@@ -101,17 +103,62 @@ namespace dealii
       std::log2(n_timesteps_at_once / n_timesteps_at_once_min);
     auto upper_lvl =
       (lower_lvl == TimeMGType::k) ? TimeMGType::tau : TimeMGType::k;
+    if (time_before_space && coarsening_type == CoarseningType::space_and_time)
+      std::swap(upper_lvl, lower_lvl);
     unsigned int n_ll = (lower_lvl == TimeMGType::k) ? n_k_lvl : n_t_lvl;
     unsigned int n_ul = (lower_lvl == TimeMGType::k) ? n_t_lvl : n_k_lvl;
     std::vector<TimeMGType> mg_type_level(n_k_lvl + n_t_lvl + n_sp_lvl - 1,
                                           TimeMGType::none);
 
-    unsigned int start_lower_lvl = time_before_space ? n_sp_lvl - 1 : 0;
-    unsigned int start_upper_lvl =
-      time_before_space ? n_sp_lvl - 1 + n_ll : n_ll;
-    std::fill_n(mg_type_level.begin() + start_lower_lvl, n_ll, lower_lvl);
-    std::fill_n(mg_type_level.begin() + start_upper_lvl, n_ul, upper_lvl);
+    if (coarsening_type == CoarseningType::space_or_time)
+      {
+        unsigned int start_lower_lvl = time_before_space ? n_sp_lvl - 1 : 0;
+        unsigned int start_upper_lvl =
+          time_before_space ? n_sp_lvl - 1 + n_ll : n_ll;
+        std::fill_n(mg_type_level.begin() + start_lower_lvl, n_ll, lower_lvl);
+        std::fill_n(mg_type_level.begin() + start_upper_lvl, n_ul, upper_lvl);
+      }
+    else
+      {
+        unsigned int ii  = std::min(mg_type_level.size() - 1,
+                                   static_cast<size_t>((n_ul + n_ll) * 2 - 1));
+        unsigned int isp = 0;
+        for (unsigned int j = n_ul + n_ll; j > 0; --j)
+          {
+            if (isp < n_sp_lvl - 1)
+              mg_type_level[ii] = TimeMGType::none, --ii, ++isp;
+            mg_type_level[ii] = j <= n_ll ? lower_lvl : upper_lvl, --ii;
+          }
+        if (time_before_space)
+          std::reverse(mg_type_level.begin(), mg_type_level.end());
+      }
     return mg_type_level;
+  }
+
+  inline std::vector<size_t>
+  get_precondition_stmg_types(std::vector<TimeMGType> const &mg_type_level,
+                              CoarseningType                 coarsening_type,
+                              bool                           time_before_space)
+  {
+    std::vector<size_t> ret(mg_type_level.size() + 1, 1);
+    if (coarsening_type == CoarseningType::space_or_time)
+      return ret;
+    size_t start = time_before_space ? mg_type_level.size() - 1 : 0;
+    int    step  = time_before_space ? -1 : 1;
+    for (size_t i = start;
+         (time_before_space ? i > 0 : i < mg_type_level.size() - 1);
+         i += step)
+      {
+        if (mg_type_level[i] != TimeMGType::none &&
+            mg_type_level[i + step] == TimeMGType::none)
+          {
+            ret[i]        = time_before_space ? 0 : 1;
+            ret[i + step] = time_before_space ? 1 : 0;
+            i += step;
+          }
+      }
+
+    return ret;
   }
 
   template <int dim>

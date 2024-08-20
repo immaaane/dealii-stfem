@@ -131,6 +131,13 @@ namespace dealii
       return Alpha.m() * std::max(K.m(), M.m());
     }
 
+    virtual types::global_dof_index
+    n() const
+    {
+      AssertDimension(m(), Alpha.n() * std::max(K.m(), M.m()));
+      return m();
+    }
+
     virtual Number
     el(unsigned int, unsigned int) const
     {

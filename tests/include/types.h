@@ -38,6 +38,13 @@ enum class ProblemType : unsigned int
   wave   = 2,
   stokes = 3,
 };
+
+enum class CoarseningType : int
+{
+  space_or_time  = 0,
+  space_and_time = 1,
+};
+
 static std::unordered_map<std::string, ProblemType> const str_to_problem_type =
   {{"heat", ProblemType::heat},
    {"wave", ProblemType::wave},
@@ -56,3 +63,7 @@ static std::unordered_map<std::string,
     {"go_to_one",
      dealii::MGTransferGlobalCoarseningTools::PolynomialCoarseningSequenceType::
        go_to_one}};
+
+static std::unordered_map<std::string, CoarseningType> const
+  str_to_coarsening_type = {{"space_and_time", CoarseningType::space_and_time},
+                            {"space_or_time", CoarseningType::space_or_time}};

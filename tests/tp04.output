@@ -72,3 +72,13 @@ Computed Index: 20 Decomposed: Timestep: 1, variable: 2, timedof: 0 [PASS]
 Computed Index: 21 Decomposed: Timestep: 1, variable: 2, timedof: 1 [PASS]
 Computed Index: 22 Decomposed: Timestep: 1, variable: 2, timedof: 2 [PASS]
 Computed Index: 23 Decomposed: Timestep: 1, variable: 2, timedof: 3 [PASS]
+[PASS] Test 1: No space, lower level tau, then k
+[PASS] Test 2: No space lower level k, then tau
+[PASS] Test 3: Interleaving of tau with space, then k
+[PASS] Test 3: Interleaving of tau with space, then k
+[PASS] Test 4: Equal number of k and space levels
+[PASS] Test 4: Equal number of k and space levels
+[PASS] Test 5: Many space levels, some tau and k levels
+[PASS] Test 5: Many space levels, some tau and k levels
+[PASS] Test 6: Test 5, but time before space
+[PASS] Test 6: Test 5, but time before space

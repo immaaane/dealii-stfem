@@ -396,7 +396,6 @@ test(dealii::ConditionalOStream &pcout,
     std::unique_ptr<Preconditioner> preconditioner =
       std::make_unique<Preconditioner>(timer,
                                        parameters,
-                                       fe_degree,
                                        n_timesteps_at_once,
                                        mg_type_level,
                                        poly_time_sequence,

@@ -792,6 +792,75 @@ namespace dealii
     std::vector<FullMatrix<Number>>                                blocks;
   };
 
+
+  template <typename Number, typename PreconType>
+  class PreconditionSTMG
+  {
+    using BlockVectorType = BlockVectorT<Number>;
+    using VectorType      = VectorT<Number>;
+
+  public:
+    using AdditionalData = std::variant<PreconditionIdentity::AdditionalData,
+                                        typename PreconType::AdditionalData>;
+    static constexpr size_t id = 0, precon = 1;
+
+    AdditionalData additional_data;
+
+    PreconditionSTMG()
+    {}
+
+    PreconditionSTMG(PreconType const &smoother_)
+      : smoother_variant(smoother_)
+    {}
+
+
+    template <typename MatrixType>
+    void
+    initialize(
+      const MatrixType                                 &matrix,
+      std::variant<PreconditionIdentity::AdditionalData,
+                   typename PreconType::AdditionalData> additional_data)
+    {
+      if (additional_data.index() == id)
+        {
+          auto &s = smoother_variant.template emplace<id>();
+          s.initialize(matrix, std::get<id>(additional_data));
+        }
+      else
+        {
+          auto &s = smoother_variant.template emplace<precon>();
+          s.initialize(matrix, std::get<precon>(additional_data));
+        }
+    }
+
+    void
+    vmult(BlockVectorType &dst, const BlockVectorType &src) const
+    {
+      std::visit([&dst, &src](auto &s) { s.vmult(dst, src); },
+                 smoother_variant);
+    }
+    void
+    Tvmult(BlockVectorType &dst, const BlockVectorType &src) const
+    {
+      std::visit([&dst, &src](auto &s) { s.Tvmult(dst, src); },
+                 smoother_variant);
+    }
+    void
+    clear()
+    {
+      std::visit([](auto &s) { s.clear(); }, smoother_variant);
+    }
+
+    void
+    smooth(BlockVectorType &u, BlockVectorType const &rhs) const
+    {
+      vmult(u, rhs);
+    }
+
+  private:
+    std::variant<PreconditionIdentity, PreconType> smoother_variant;
+  };
+
   struct PreconditionerGMGAdditionalData
   {
     double       smoothing_range               = 0.0;
@@ -819,6 +888,8 @@ namespace dealii
     bool         time_before_space = false;
     TimeStepType type              = TimeStepType::CGP;
     ProblemType  problem           = ProblemType::wave;
+
+    CoarseningType coarsening_type = CoarseningType::space_or_time;
     MGTransferGlobalCoarseningTools::PolynomialCoarseningSequenceType
       poly_coarsening = MGTransferGlobalCoarseningTools::
         PolynomialCoarseningSequenceType::decrease_by_one;
@@ -849,7 +920,8 @@ namespace dealii
     void
     parse(const std::string file_name)
     {
-      std::string              type_, problem_, p_mg_ = "decrease_by_one";
+      std::string type_, problem_, p_mg_ = "decrease_by_one",
+                                   c_type_ = "space_or_time";
       dealii::ParameterHandler prm;
       prm.add_parameter("doOutput", do_output);
       prm.add_parameter("printTiming", print_timing);
@@ -858,6 +930,7 @@ namespace dealii
       prm.add_parameter("timeType", type_);
       prm.add_parameter("problemType", problem_);
       prm.add_parameter("pMgType", p_mg_);
+      prm.add_parameter("coarseningType", c_type_);
       prm.add_parameter("nTimestepsAtOnce", n_timesteps_at_once);
       prm.add_parameter("nTimestepsAtOnceMin", n_timesteps_at_once_min);
       prm.add_parameter("feDegree", fe_degree);
@@ -902,6 +975,7 @@ namespace dealii
       type            = str_to_time_type.at(type_);
       problem         = str_to_problem_type.at(problem_);
       poly_coarsening = str_to_polynomial_coarsening_type.at(p_mg_);
+      coarsening_type = str_to_coarsening_type.at(c_type_);
       if (n_timesteps_at_once_min == -1)
         n_timesteps_at_once_min = n_timesteps_at_once / 2;
 
@@ -926,8 +1000,9 @@ namespace dealii
     using MGTransferType = STMGTransferBlockMatrixFree<dim, Number>;
 
     using SmootherPreconditionerType = PreconditionVanka<Number>;
-    using SmootherType =
-      PreconditionRelaxation<LevelMatrixType, SmootherPreconditionerType>;
+    using SmootherType               = PreconditionSTMG<
+                    Number,
+                    PreconditionRelaxation<LevelMatrixType, SmootherPreconditionerType>>;
     using MGSmootherType =
       MGSmootherPrecondition<LevelMatrixType, SmootherType, BlockVectorType>;
 
@@ -935,7 +1010,6 @@ namespace dealii
     GMG(
       TimerOutput                                &timer,
       Parameters<dim> const                      &parameters,
-      unsigned int const                          r,
       unsigned int const                          n_timesteps_at_once,
       const std::vector<TimeMGType>              &mg_type_level,
       std::vector<unsigned int> const            &poly_time_sequence,
@@ -953,6 +1027,11 @@ namespace dealii
       , additional_data(parameters.mg_data)
       , min_level(mg_dof_handlers.min_level())
       , max_level(mg_dof_handlers.max_level())
+      , mg_sequence(mg_type_level)
+      , precondition_sequence(
+          get_precondition_stmg_types(mg_sequence,
+                                      parameters.coarsening_type,
+                                      parameters.time_before_space))
       , src_(std::move(tmp1))
       , dst_(std::move(tmp2))
       , dof_handler(dof_handler)
@@ -986,7 +1065,6 @@ namespace dealii
     GMG(
       TimerOutput                     &timer,
       Parameters<dim> const           &parameters,
-      unsigned int const               r,
       unsigned int const               n_timesteps_at_once,
       const std::vector<TimeMGType>   &mg_type_level,
       const std::vector<unsigned int> &poly_time_sequence,
@@ -1004,6 +1082,11 @@ namespace dealii
       , additional_data(parameters.mg_data)
       , min_level(mg_dof_handlers.min_level())
       , max_level(mg_dof_handlers.max_level())
+      , mg_sequence(mg_type_level)
+      , precondition_sequence(
+          get_precondition_stmg_types(mg_sequence,
+                                      parameters.coarsening_type,
+                                      parameters.time_before_space))
       , src_(std::move(tmp1))
       , dst_(std::move(tmp2))
       , dof_handler(1, &dof_handler)
@@ -1049,18 +1132,24 @@ namespace dealii
         min_level, max_level);
 
       // setup smoothers on each level
-      for (unsigned int level = min_level; level <= max_level; ++level)
+      for (unsigned int level = min_level, i = 0; level <= max_level;
+           ++level, ++i)
         {
-          smoother_data[level].preconditioner = precondition_vanka[level];
-          smoother_data[level].n_iterations   = additional_data.smoothing_steps;
-          smoother_data[level].relaxation =
-            additional_data.estimate_relaxation ? 0.0 : 1.0;
-          smoother_data[level].eigenvalue_algorithm =
-            internal::EigenvalueAlgorithm::power_iteration;
-          smoother_data[level].eig_cg_n_iterations =
-            additional_data.smoothing_eig_cg_n_iterations;
-          smoother_data[level].smoothing_range =
-            additional_data.smoothing_range;
+          if (precondition_sequence[i] == SmootherType::precon)
+            {
+              auto &sd =
+                smoother_data[level].template emplace<SmootherType::precon>();
+              sd.preconditioner = precondition_vanka[level];
+              sd.n_iterations   = additional_data.smoothing_steps;
+              sd.relaxation = additional_data.estimate_relaxation ? 0.0 : 1.0;
+              sd.eigenvalue_algorithm =
+                internal::EigenvalueAlgorithm::power_iteration;
+              sd.eig_cg_n_iterations =
+                additional_data.smoothing_eig_cg_n_iterations;
+              sd.smoothing_range = additional_data.smoothing_range;
+            }
+          else
+            smoother_data[level].template emplace<SmootherType::id>();
         }
       mg_smoother = std::make_unique<MGSmootherType>(1,
                                                      additional_data.variable,
@@ -1161,6 +1250,8 @@ namespace dealii
     PreconditionerGMGAdditionalData additional_data;
     const unsigned int              min_level;
     const unsigned int              max_level;
+    std::vector<TimeMGType>         mg_sequence;
+    std::vector<size_t>             precondition_sequence;
 
     std::unique_ptr<BlockVectorType> src_;
     std::unique_ptr<BlockVectorType> dst_;
