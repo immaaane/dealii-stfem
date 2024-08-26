@@ -24,6 +24,8 @@
 #include "include/operators.h"
 #include "include/time_integrators.h"
 
+// #define CHECK_COMPUTE_SYSTEM_MATRIX
+
 using namespace dealii;
 using dealii::numbers::PI;
 
@@ -102,8 +104,10 @@ test(dealii::ConditionalOStream &pcout,
                                             locally_relevant_dofs_u);
     DoFTools::extract_locally_relevant_dofs(dof_handler_p,
                                             locally_relevant_dofs_p);
-    constraints_u.reinit(locally_relevant_dofs_u);
-    constraints_p.reinit(locally_relevant_dofs_p);
+    constraints_u.reinit(dof_handler_u.locally_owned_dofs(),
+                         locally_relevant_dofs_u);
+    constraints_p.reinit(dof_handler_p.locally_owned_dofs(),
+                         locally_relevant_dofs_p);
     DoFTools::make_hanging_node_constraints(dof_handler_u, constraints_u);
     DoFTools::make_zero_boundary_constraints(dof_handler_u, constraints_u);
     DoFTools::make_hanging_node_constraints(dof_handler_p, constraints_p);
@@ -120,11 +124,11 @@ test(dealii::ConditionalOStream &pcout,
     double       time     = 0.;
     double       time_len = parameters.end_time - time;
     unsigned int n_steps  = static_cast<unsigned int>((time_len) / spc_step);
-    double time_step_size = time_len * pow(2.0, -(refinement + 1)) / n_steps;
+    double       time_step_size = time_len * pow(2.0, -refinement) / n_steps;
 
     // matrix-free operators
     StokesMatrixFreeOperator<dim, Number> Stokes_mf(
-      mapping, dof_handlers, constraints, quads_u, viscosity);
+      mapping, dof_handlers, constraints, quads, viscosity);
     MatrixFreeOperatorVector<dim, Number> M_mf(
       mapping, dof_handler_u, constraints_u, quad_u, 1.0, 0.0);
 
@@ -143,9 +147,6 @@ test(dealii::ConditionalOStream &pcout,
                       TimerOutput::never,
                       TimerOutput::cpu_and_wall_times);
 
-    FullMatrix<Number> lhs_uK, lhs_uM, rhs_uK, rhs_uM,
-      zero(Gamma.m(), Gamma.n());
-
     using SystemN = SystemMatrixStokes<Number,
                                        StokesMatrixFreeOperator<dim, Number>,
                                        MatrixFreeOperatorVector<dim, Number>>;
@@ -154,10 +155,13 @@ test(dealii::ConditionalOStream &pcout,
                          StokesMatrixFreeOperator<dim, NumberPreconditioner>,
                          MatrixFreeOperatorVector<dim, NumberPreconditioner>>;
     std::unique_ptr<SystemN> rhs_matrix, matrix;
-    lhs_uK = Alpha;
-    lhs_uM = Beta;
-    rhs_uK = is_cgp ? Gamma : zero;
-    rhs_uM = is_cgp ? Zeta : Gamma;
+
+    FullMatrix<Number> const zero(Gamma.m(), Gamma.n());
+    FullMatrix<Number> const lhs_uK = Alpha;
+    FullMatrix<Number> const lhs_uM = Beta;
+    FullMatrix<Number> const rhs_uK = is_cgp ? Gamma : zero;
+    FullMatrix<Number> const rhs_uM = is_cgp ? Zeta : Gamma;
+
     matrix = std::make_unique<SystemN>(
       timer, Stokes_mf, M_mf, lhs_uK, lhs_uM, blk_slice);
     rhs_matrix = std::make_unique<SystemN>(
@@ -184,6 +188,7 @@ test(dealii::ConditionalOStream &pcout,
                            n_timesteps_at_once,
                            n_timesteps_min,
                            TimeMGType::k,
+                           parameters.coarsening_type,
                            time_before_space);
     mg_triangulations =
       get_space_time_triangulation(mg_type_level, mg_triangulations);
@@ -198,13 +203,6 @@ test(dealii::ConditionalOStream &pcout,
     MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers_p(
       min_level, max_level);
     MGLevelObject<std::vector<const DoFHandler<dim> *>> mg_dof_handlers(
-      min_level, max_level);
-
-    MGLevelObject<std::shared_ptr<const BlockSparsityPatternType>>
-      mg_sparsity_patterns(min_level, max_level);
-    MGLevelObject<std::shared_ptr<const BlockSparseMatrixType>> mg_M(min_level,
-                                                                     max_level);
-    MGLevelObject<std::shared_ptr<const BlockSparseMatrixType>> mg_Stokes(
       min_level, max_level);
 
     MGLevelObject<std::shared_ptr<
@@ -264,19 +262,22 @@ test(dealii::ConditionalOStream &pcout,
 
         dof_handler_p_->distribute_dofs(fe_p);
         dof_handler_u_->distribute_dofs(fe_u);
-
         IndexSet locally_relevant_dofs_u_;
         IndexSet locally_relevant_dofs_p_;
         DoFTools::extract_locally_relevant_dofs(*dof_handler_u_,
                                                 locally_relevant_dofs_u_);
         DoFTools::extract_locally_relevant_dofs(*dof_handler_p_,
                                                 locally_relevant_dofs_p_);
-        constraints_u_->reinit(locally_relevant_dofs_u_);
-        constraints_p_->reinit(locally_relevant_dofs_p_);
+        constraints_u_->reinit(dof_handler_u_->locally_owned_dofs(),
+                               locally_relevant_dofs_u_);
+        constraints_p_->reinit(dof_handler_p_->locally_owned_dofs(),
+                               locally_relevant_dofs_p_);
         DoFTools::make_hanging_node_constraints(*dof_handler_u_,
                                                 *constraints_u_);
+#ifndef CHECK_COMPUTE_SYSTEM_MATRIX
         DoFTools::make_zero_boundary_constraints(*dof_handler_u_,
                                                  *constraints_u_);
+#endif
         DoFTools::make_hanging_node_constraints(*dof_handler_p_,
                                                 *constraints_p_);
         constraints_u_->close();
@@ -312,6 +313,12 @@ test(dealii::ConditionalOStream &pcout,
         auto Stokes           = std::make_shared<BlockSparseMatrixType>();
         auto M                = std::make_shared<BlockSparseMatrixType>();
 
+        AffineConstraints<NumberPreconditioner> empty_constraints_p(
+          dof_handler_p_->locally_owned_dofs(), locally_relevant_dofs_p_);
+        AffineConstraints<NumberPreconditioner> empty_constraints_u(
+          dof_handler_u_->locally_owned_dofs(), locally_relevant_dofs_u_);
+        empty_constraints_u.close();
+        empty_constraints_p.close();
         // create sparsity pattern
         {
           std::vector<IndexSet> row_partitioning{
@@ -331,47 +338,81 @@ test(dealii::ConditionalOStream &pcout,
           make_block_sparsity_pattern_block(*dof_handler_u_,
                                             *dof_handler_u_,
                                             sparsity_pattern->block(0, 0),
-                                            *constraints_u_,
-                                            *constraints_u_,
+                                            empty_constraints_u,
+                                            empty_constraints_u,
                                             true,
                                             subdomain);
           make_block_sparsity_pattern_block(*dof_handler_u_,
                                             *dof_handler_p_,
                                             sparsity_pattern->block(0, 1),
-                                            *constraints_u_,
-                                            *constraints_p_,
+                                            empty_constraints_u,
+                                            empty_constraints_p,
                                             true,
                                             subdomain);
           make_block_sparsity_pattern_block(*dof_handler_p_,
                                             *dof_handler_u_,
                                             sparsity_pattern->block(1, 0),
-                                            *constraints_p_,
-                                            *constraints_u_,
+                                            empty_constraints_p,
+                                            empty_constraints_u,
                                             true,
                                             subdomain);
           sparsity_pattern->compress();
         }
         // create Stokes matrix
         Stokes->reinit(*sparsity_pattern);
-        Stokes_mf_->compute_system_matrix(*Stokes);
+        Stokes_mf_->compute_system_matrix(
+          *Stokes,
+          std::vector<const dealii::AffineConstraints<NumberPreconditioner> *>{
+            &empty_constraints_u, &empty_constraints_p});
         //  create vector-valued mass matrix
         M->reinit(sparsity_pattern->n_block_rows(),
                   sparsity_pattern->n_block_cols());
         M->block(0, 0).reinit(sparsity_pattern->block(0, 0));
-        M_mf_->compute_system_matrix(M->block(0, 0));
+        M_mf_->compute_system_matrix(M->block(0, 0), &empty_constraints_u);
 
+#ifdef CHECK_COMPUTE_SYSTEM_MATRIX
+        if constexpr (std::is_same_v<double, NumberPreconditioner>)
+          {
+            BlockVectorT<NumberPreconditioner> src(2);
+            BlockVectorT<NumberPreconditioner> dst(2);
+            BlockVectorT<NumberPreconditioner> dst2(2);
+            Stokes_mf_->initialize_dof_vector(src);
+            Stokes_mf_->initialize_dof_vector(dst);
+            Stokes_mf_->initialize_dof_vector(dst2);
+            for (unsigned int iv = 0; iv < 2; ++iv)
+              {
+                for (unsigned int i = 0; i < src.block(iv).size(); ++i)
+                  {
+                    src              = 0.0;
+                    src.block(iv)(i) = 1.0;
+                    Stokes_mf_->vmult(dst, src);
+                    Stokes->vmult(dst2, src);
+                    dst.add(-1.0, dst2);
+                    if (dst.l2_norm() >= 1.e-16)
+                      throw ExcInternalError();
+                  }
+              }
+            for (unsigned int i = 0; i < src.block(0).size(); ++i)
+              {
+                src             = 0.0;
+                src.block(0)(i) = 1.0;
+                M_mf_->vmult(dst.block(0), src.block(0));
+                M->block(0, 0).vmult(dst2.block(0), src.block(0));
+                dst.block(0).add(-1.0, dst2.block(0));
+                if (dst.l2_norm() >= 1.e-16)
+                  throw ExcInternalError();
+              }
+          }
+#endif
         // matrix->attach(*mg_operators[l]);
-        mg_sparsity_patterns[l] = sparsity_pattern;
-        mg_M_mf[l]              = M_mf_;
-        mg_Stokes_mf[l]         = Stokes_mf_;
-        mg_M[l]                 = M;
-        mg_Stokes[l]            = Stokes;
+        mg_M_mf[l]      = M_mf_;
+        mg_Stokes_mf[l] = Stokes_mf_;
         precondition_vanka[l] =
           std::make_shared<PreconditionVanka<NumberPreconditioner>>(
             timer,
-            mg_Stokes[l],
-            mg_M[l],
-            mg_sparsity_patterns[l],
+            Stokes,
+            M,
+            sparsity_pattern,
             lhs_uK_p,
             lhs_uM_p,
             mg_dof_handlers[l],
@@ -380,10 +421,6 @@ test(dealii::ConditionalOStream &pcout,
             M_mask);
       }
 
-
-
-    // std::shared_ptr<MGSmootherBase<BlockVectorType>> smoother =
-    //   std::make_shared<MGSmootherIdentity<BlockVectorType>>();
     std::unique_ptr<BlockVectorT<NumberPreconditioner>> tmp1, tmp2;
     if (!std::is_same_v<Number, NumberPreconditioner>)
       {
@@ -419,7 +456,7 @@ test(dealii::ConditionalOStream &pcout,
         exact_solution_p =
           std::make_unique<stokes::ExactSolutionP<dim, Number>>();
         rhs_function_u =
-          std::make_unique<stokes::RHSFunction<dim, Number>>(viscosity, false);
+          std::make_unique<stokes::RHSFunction<dim, Number>>(viscosity);
         rhs_function_p =
           std::make_unique<Functions::ZeroFunction<dim, Number>>(1);
       }
@@ -589,7 +626,7 @@ test(dealii::ConditionalOStream &pcout,
     ErrorCalculator<dim, Number> error_calculator_u(
       parameters.type,
       fe_degree,
-      fe_degree,
+      fe_u.tensor_degree(),
       mapping,
       dof_handler_u,
       *exact_solution_u,
@@ -597,7 +634,7 @@ test(dealii::ConditionalOStream &pcout,
     ErrorCalculator<dim, Number> error_calculator_p(
       parameters.type,
       fe_degree,
-      fe_degree,
+      fe_p.tensor_degree(),
       mapping,
       dof_handler_p,
       *exact_solution_p,
@@ -625,8 +662,10 @@ test(dealii::ConditionalOStream &pcout,
 
     evaluate_exact_solution_u(
       0, x.block(blk_slice.index(n_timesteps_at_once - 1, 0, nt_dofs - 1)));
+    evaluate_exact_solution_p(
+      0, x.block(blk_slice.index(n_timesteps_at_once - 1, 1, nt_dofs - 1)));
 
-    double           l2 = 0., l8 = -1., h1_semi = 0.;
+    double           l2 = 0., l8 = -1., h1_semi = 0., hdiv_semi = 0.;
     double           l2_p = 0., l8_p = -1., h1_semi_p = 0.;
     constexpr double qNaN           = std::numeric_limits<double>::quiet_NaN();
     bool const       st_convergence = parameters.space_time_conv_test;
@@ -752,11 +791,17 @@ test(dealii::ConditionalOStream &pcout,
 
         if (st_convergence)
           {
-            auto error_on_In_u = error_calculator_u.evaluate_error(
-              time, time_step_size, x, prev_x.block(0), n_timesteps_at_once);
+            auto error_on_In_u =
+              error_calculator_u.evaluate_error(time,
+                                                time_step_size,
+                                                x,
+                                                prev_x.block(0),
+                                                n_timesteps_at_once,
+                                                true);
             l2 += error_on_In_u[VectorTools::L2_norm];
             l8 = std::max(error_on_In_u[VectorTools::Linfty_norm], l8);
             h1_semi += error_on_In_u[VectorTools::H1_seminorm];
+            hdiv_semi += error_on_In_u[VectorTools::Hdiv_seminorm];
 
             auto error_on_In_p = error_calculator_p.evaluate_error(
               time, time_step_size, x, prev_x.block(1), n_timesteps_at_once);
@@ -819,6 +864,8 @@ test(dealii::ConditionalOStream &pcout,
     table.add_value("L2-L2(u)", st_convergence ? std::sqrt(l2) : qNaN);
     table.add_value("L2-H1_semi(u)",
                     st_convergence ? std::sqrt(h1_semi) : qNaN);
+    table.add_value("L2-Hdiv_semi(u)",
+                    st_convergence ? std::sqrt(hdiv_semi) : qNaN);
     table.add_value("L\u221E-L\u221E(p)", st_convergence ? l8_p : qNaN);
     table.add_value("L2-L2(p)", st_convergence ? std::sqrt(l2_p) : qNaN);
     table.add_value("L2-H1_semi(p)",
@@ -852,6 +899,7 @@ test(dealii::ConditionalOStream &pcout,
       table.set_scientific("L\u221E-L\u221E(u)", true);
       table.set_scientific("L2-L2(u)", true);
       table.set_scientific("L2-H1_semi(u)", true);
+      table.set_scientific("L2-Hdiv_semi(u)", true);
       table.set_scientific("L\u221E-L\u221E(p)", true);
       table.set_scientific("L2-L2(p)", true);
       table.set_scientific("L2-H1_semi(p)", true);
@@ -860,6 +908,8 @@ test(dealii::ConditionalOStream &pcout,
       table.evaluate_convergence_rates("L2-L2(u)",
                                        ConvergenceTable::reduction_rate_log2);
       table.evaluate_convergence_rates("L2-H1_semi(u)",
+                                       ConvergenceTable::reduction_rate_log2);
+      table.evaluate_convergence_rates("L2-Hdiv_semi(u)",
                                        ConvergenceTable::reduction_rate_log2);
       table.evaluate_convergence_rates("L\u221E-L\u221E(p)",
                                        ConvergenceTable::reduction_rate_log2);
@@ -897,7 +947,7 @@ main(int argc, char **argv)
     util::cl_options clo(argc, argv);
     clo.insert(file, "file", arg_t::required, 'f', "Path to parameterfile");
     clo.insert(dim, "dim", arg_t::required, 'd', "Spatial dimensions");
-    clo.insert(precondition_float, "precondition_float", arg_t::none, 'p');
+    clo.insert(precondition_float, "precondition_float", arg_t::required, 'p');
     clo.insert(log_file_prefix,
                "log_prefix",
                util::arg_type::required,
@@ -920,8 +970,18 @@ main(int argc, char **argv)
   };
   if (file == "default")
     {
+#ifdef TESTDIRECTORY
+      std::string test_dir(TESTDIRECTORY);
+#else
+      Assert(
+        false,
+        ExcMessage(
+          "If TESTDIRECTORY is not defined parameter file have to be provided"));
+      std::exit();
+#endif
       std::vector<std::pair<std::string, std::string>> tests = {
-        {"Stokes\n", "tests/json/tfstokes.json"}};
+        {"Stokes DG\n", "tests/json/tf01stokes.json"},
+        {"Stokes CGP\n", "tests/json/tf02stokes.json"}};
       for (const auto &[header, file_name] : tests)
         {
           dealii::deallog << header;

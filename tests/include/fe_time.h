@@ -1115,7 +1115,7 @@ namespace dealii
       ret[i].reinit(tw[i].m() * 2, tw[i].n());
     BlockSlice blk_slice(n_timesteps_at_once,
                          2,
-                         tw[0].m() / n_timesteps_at_once);
+                         (type == TimeStepType::DG) ? r + 1 : r);
 
     for (int iv = 0; iv < 2; ++iv)
       {
@@ -1125,9 +1125,10 @@ namespace dealii
         for (int jv = 0; jv < 2; ++jv)
           {
             auto jvariable_indices = blk_slice.get_time(jv);
-            tw[0].scatter_matrix_to(variable_indices,
-                                    jvariable_indices,
-                                    ret[0]);
+            if (!(jv == 1 && iv == 1))
+              tw[0].scatter_matrix_to(variable_indices,
+                                      jvariable_indices,
+                                      ret[0]);
           }
         // \partial_t v
         if (iv == 0)
@@ -1136,6 +1137,8 @@ namespace dealii
             for (int i = 2; i < 4; ++i)
               tw[i].scatter_matrix_to(variable_indices, {0}, ret[i]);
           }
+        if (iv == 1 && type == TimeStepType::CGP)
+          tw[2].scatter_matrix_to(variable_indices, {0}, ret[2]);
       }
     return ret;
   }
@@ -1160,6 +1163,7 @@ namespace dealii
   void
   equ(BlockVectorT<Number> &blk, BlockVectorSliceT<Number> const &slice)
   {
+    AssertDimension(slice.size(), blk.n_blocks());
     for (unsigned int i = 0; i < slice.size(); ++i)
       blk.block(i).equ(1.0, slice[i].get());
   }
@@ -1167,6 +1171,7 @@ namespace dealii
   void
   equ(BlockVectorT<Number> &blk, MutableBlockVectorSliceT<Number> const &slice)
   {
+    AssertDimension(slice.size(), blk.n_blocks());
     for (unsigned int i = 0; i < slice.size(); ++i)
       blk.block(i).equ(1.0, slice[i].get());
   }

@@ -135,15 +135,13 @@ namespace dealii
         sparsity_pattern.n_block_rows(), sparsity_pattern.n_block_cols());
       for (unsigned int i = 0; i < sparsity_pattern.n_block_rows(); ++i)
         for (unsigned int j = 0; j < sparsity_pattern.n_block_cols(); ++j)
-          {
-            if (mask.empty() || mask(i, j))
-              restrict_to_full_matrices_(system_matrix.block(i, j),
-                                         sparsity_pattern.block(i, j),
-                                         row_indices[i],
-                                         col_indices[j],
-                                         blocks_(i, j),
-                                         scaling.block(i));
-          }
+          if (mask.empty() || mask(i, j))
+            restrict_to_full_matrices_(system_matrix.block(i, j),
+                                       sparsity_pattern.block(i, j),
+                                       row_indices[i],
+                                       col_indices[j],
+                                       blocks_(i, j),
+                                       scaling.block(i));
       return blocks_;
     }
 

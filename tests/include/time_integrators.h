@@ -42,15 +42,16 @@ namespace dealii
       , Alpha(Alpha_)
       , Gamma(Gamma_)
       , solver_control(200, 1.e-12, gmres_tolerance_, false, true)
-      , solver(solver_control)
+      , solver(solver_control,
+               typename SolverFGMRES<
+                 BlockVectorType>::AdditionalData::AdditionalData(200))
       , preconditioner(preconditioner_)
       , matrix(matrix_)
       , rhs_matrix(rhs_matrix_)
       , integrate_rhs_function(integrate_rhs_function)
       , n_timesteps_at_once(n_timesteps_at_once_)
       , idx(n_timesteps_at_once,
-            Alpha.m() /
-              (type == TimeStepType::DG ? time_degree + 1 : time_degree),
+            integrate_rhs_function.size(),
             (type == TimeStepType::DG ? time_degree + 1 : time_degree))
       , do_extrapolate(extrapolate_)
     {
@@ -66,32 +67,36 @@ namespace dealii
                    double const     time,
                    double const     time_step) const
     {
+      AssertDimension(rhs.n_blocks(), idx.n_blocks());
       BlockVectorType tmp(integrate_rhs_function.size());
       for (unsigned int i = 0; i < integrate_rhs_function.size(); ++i)
         matrix.initialize_dof_vector(tmp.block(i), i);
 
-      for (unsigned int iv = 0; iv < idx.n_variables(); ++iv)
-        for (unsigned int it = 0; it < idx.n_timesteps_at_once(); ++it)
-          for (unsigned int j = 0; j < quad_time.size(); ++j)
-            {
-              double time_ =
-                time + time_step * it + time_step * quad_time.point(j)[0];
-              integrate_rhs_function[iv](time_, tmp.block(iv));
-              /// Here we exploit that Alpha is a diagonal matrix
-              if (type == TimeStepType::DG)
-                rhs.block(idx(it, iv, j))
-                  .add(Alpha(idx(0, iv, j), idx(0, iv, j)), tmp.block(iv));
-              else
-                {
-                  if (j == 0)
-                    for (unsigned int i = 0; i < idx.n_timedofs(); ++i)
-                      rhs.block(idx(it, iv, i))
-                        .add(-Gamma(idx(0, iv, i), 0), tmp.block(iv));
-                  else
-                    rhs.block(idx(it, iv, j - 1))
-                      .add(Alpha(j - 1, j - 1), tmp.block(iv));
-                }
-            }
+      for (unsigned int it = 0; it < idx.n_timesteps_at_once(); ++it)
+        for (unsigned int j = 0; j < quad_time.size(); ++j)
+          {
+            double time_ =
+              time + time_step * it + time_step * quad_time.point(j)[0];
+            for (unsigned int iv = 0; iv < idx.n_variables(); ++iv)
+              {
+                integrate_rhs_function[iv](time_, tmp.block(iv));
+                /// Here we exploit that Alpha is a diagonal matrix
+                if (type == TimeStepType::DG)
+                  rhs.block(idx(it, iv, j))
+                    .add(Alpha(idx(0, iv, j), idx(0, iv, j)), tmp.block(iv));
+                else
+                  {
+                    if (j == 0)
+                      for (unsigned int i = 0; i < idx.n_timedofs(); ++i)
+                        rhs.block(idx(it, iv, i))
+                          .add(-Gamma(idx(0, iv, i), 0), tmp.block(iv));
+                    else
+                      rhs.block(idx(it, iv, j - 1))
+                        .add(Alpha(idx(0, iv, j - 1), idx(0, iv, j - 1)),
+                             tmp.block(iv));
+                  }
+              }
+          }
     }
 
     unsigned int

@@ -339,7 +339,6 @@ namespace dealii
       dst = 0.0;
       BlockVectorType tmp(2);
       this->K.initialize_dof_vector(tmp);
-      tmp.collect_sizes();
       BlockVectorType tmp_src(tmp.n_blocks());
       auto const     &n_timesteps_at_once = blk_slice.n_timesteps_at_once();
       for (unsigned int it = 0; it < n_timesteps_at_once; ++it)
@@ -355,9 +354,8 @@ namespace dealii
             for (unsigned int jt = 0; jt < n_timesteps_at_once; ++jt)
               for (unsigned int jd = 0; jd < blk_slice.n_timedofs(); ++jd)
                 for (unsigned int jv = 0; jv < blk_slice.n_variables(); ++jv)
-                  for (unsigned int iv = 0; iv < blk_slice.n_variables(); ++iv)
-                    scatter(
-                      dst, tmp, this->Alpha, blk_slice, jt, jv, jd, it, iv, id);
+                  scatter(
+                    dst, tmp, this->Alpha, blk_slice, jt, jv, jd, it, 0, id);
 
             // \partial_t v
             this->M.vmult(tmp.block(0), tmp_src.block(0));
@@ -377,7 +375,6 @@ namespace dealii
       dst = 0.0;
       BlockVectorType tmp(2);
       this->K.initialize_dof_vector(tmp);
-      tmp.collect_sizes();
       BlockVectorType tmp_src(tmp.n_blocks());
 
       auto const &n_timesteps_at_once = blk_slice.n_timesteps_at_once();
@@ -415,7 +412,6 @@ namespace dealii
       AssertDimension(this->Alpha.n(), 1);
       AssertDimension(src.n_blocks(), blk_slice.n_variables());
 
-      dst = 0.0;
       BlockVectorType tmp(2);
       this->K.initialize_dof_vector(tmp);
       BlockVectorType tmp_src(tmp.n_blocks());
@@ -487,7 +483,7 @@ namespace dealii
     {
       unsigned int j = blk_slice.index(jt, jv, jd);
       unsigned int i = blk_slice.index(it, iv, id);
-      if (matrix(j, i) != 0.0)
+      if (std::abs(matrix(j, i)) > 10 * std::numeric_limits<Number>::epsilon())
         dst.block(j).add(matrix(j, i), tmp.block(jv));
     }
 
@@ -651,10 +647,14 @@ namespace dealii
     }
 
     void
-    compute_system_matrix(SparseMatrixType &sparse_matrix) const
+    compute_system_matrix(
+      SparseMatrixType                        &sparse_matrix,
+      dealii::AffineConstraints<Number> const *constraints = nullptr) const
     {
+      if (constraints == nullptr)
+        constraints = &matrix_free.get_affine_constraints();
       compute_matrix(matrix_free,
-                     matrix_free.get_affine_constraints(),
+                     *constraints,
                      sparse_matrix,
                      &MatrixFreeOperator::do_cell_integral_local,
                      this);
@@ -883,11 +883,15 @@ namespace dealii
     }
 
     void
-    compute_system_matrix(BlockSparseMatrixType &sparse_matrix) const
+    compute_system_matrix(
+      BlockSparseMatrixType                                 &sparse_matrix,
+      std::vector<const dealii::AffineConstraints<Number> *> constraints =
+        std::vector<const dealii::AffineConstraints<Number> *>()) const
     {
-      std::vector<const dealii::AffineConstraints<Number> *> constraints{
-        &matrix_free.get_affine_constraints(0),
-        &matrix_free.get_affine_constraints(1)};
+      if (constraints.empty())
+        constraints = std::vector<const dealii::AffineConstraints<Number> *>{
+          &matrix_free.get_affine_constraints(0),
+          &matrix_free.get_affine_constraints(1)};
       compute_matrix(matrix_free,
                      constraints,
                      sparse_matrix,
@@ -920,8 +924,8 @@ namespace dealii
       const BlockVectorType                       &src,
       const std::pair<unsigned int, unsigned int> &range) const
     {
-      FECellIntegratorU velocity(matrix_free, 0, 0);
-      FECellIntegratorP pressure(matrix_free, 1, 1);
+      FECellIntegratorU velocity(matrix_free, 0);
+      FECellIntegratorP pressure(matrix_free, 1);
       for (unsigned int cell = range.first; cell < range.second; ++cell)
         {
           velocity.reinit(cell);
@@ -949,7 +953,7 @@ namespace dealii
           auto grad_u = velocity.get_gradient(q);
           auto div_u  = velocity.get_divergence(q);
           auto p      = pressure.get_value(q);
-          pressure.submit_value(-div_u, q);
+          pressure.submit_value(div_u, q);
           grad_u *= viscosity;
           for (unsigned int i = 0; i < dim; ++i)
             grad_u[i][i] -= p;

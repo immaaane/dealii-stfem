@@ -613,45 +613,37 @@ namespace dealii
         *K_, *SP_, indices, indices, valence, K_mask);
       auto M_blocks = SparseMatrixTools::restrict_to_full_block_matrices_(
         *M_, *SP_, indices, indices, valence, M_mask);
+      unsigned int td =
+        blk_slice.n_timedofs() * blk_slice.n_timesteps_at_once();
 
       blocks.resize(K_blocks(0, 0).size());
       for (unsigned int ii = 0; ii < blocks.size(); ++ii)
         {
-          unsigned int n_rows = 0, n_cols = 0;
+          unsigned int n_sd = 0;
           for (unsigned int i = 0; i < blk_slice.n_variables(); ++i)
-            n_rows += indices[i][ii].size();
-          for (unsigned int i = 0; i < blk_slice.n_variables(); ++i)
-            n_cols += indices[i][ii].size();
-          auto        &B = blocks[ii];
-          unsigned int td =
-            blk_slice.n_timedofs() * blk_slice.n_timesteps_at_once();
-          B = FullMatrix<Number>(n_rows * td, n_cols * td);
-
-          for (unsigned int j = 0, c_o = 0; j < blk_slice.n_blocks(); ++j)
+            n_sd += indices[i][ii].size();
+          auto &B = blocks[ii];
+          B       = FullMatrix<Number>(n_sd * td, n_sd * td);
+          for (unsigned int i = 0, r_o = 0; i < blk_slice.n_blocks(); ++i)
             {
-              auto const &[jt, jv, jd] = blk_slice.decompose(j);
-              for (unsigned int i = 0, r_o = 0; i < blk_slice.n_blocks(); ++i)
+              auto const &[it, iv, id] = blk_slice.decompose(i);
+              for (unsigned int j = 0, c_o = 0; j < blk_slice.n_blocks(); ++j)
                 {
-                  auto const &[it, iv, id] = blk_slice.decompose(i);
-                  if (Beta(i, j) != 0.0 || Alpha(i, j) != 0.0)
-                    {
-                      const auto &K = K_blocks(iv, jv)[ii];
-                      const auto &M = M_blocks(iv, jv)[ii];
-
-                      if (M_mask.empty() || M_mask(iv, jv))
-                        for (unsigned int k = 0; k < K.m(); ++k)
-                          for (unsigned int l = 0; l < K.n(); ++l)
-                            B(r_o + k, c_o + l) = Beta(i, j) * M(k, l);
-                      if (K_mask.empty() || K_mask(iv, jv))
-                        for (unsigned int k = 0; k < K.m(); ++k)
-                          for (unsigned int l = 0; l < K.n(); ++l)
-                            B(r_o + k, c_o + l) = Alpha(i, j) * K(k, l);
-                    }
-                  r_o += indices[iv][ii].size();
+                  auto const &[jt, jv, jd] = blk_slice.decompose(j);
+                  const auto &K            = K_blocks(iv, jv)[ii];
+                  const auto &M            = M_blocks(iv, jv)[ii];
+                  if (Beta(i, j) != 0.0 && (M_mask.empty() || M_mask(iv, jv)))
+                    for (unsigned int k = 0; k < M.m(); ++k)
+                      for (unsigned int l = 0; l < M.n(); ++l)
+                        B(r_o + k, c_o + l) += Beta(i, j) * M(k, l);
+                  if (Alpha(i, j) != 0.0 && (K_mask.empty() || K_mask(iv, jv)))
+                    for (unsigned int k = 0; k < K.m(); ++k)
+                      for (unsigned int l = 0; l < K.n(); ++l)
+                        B(r_o + k, c_o + l) += Alpha(i, j) * K(k, l);
+                  c_o += indices[jv][ii].size();
                 }
-              c_o += indices[jv][ii].size();
+              r_o += indices[iv][ii].size();
             }
-
           B.gauss_jordan();
         }
     }
@@ -1001,8 +993,8 @@ namespace dealii
 
     using SmootherPreconditionerType = PreconditionVanka<Number>;
     using SmootherType               = PreconditionSTMG<
-                    Number,
-                    PreconditionRelaxation<LevelMatrixType, SmootherPreconditionerType>>;
+      Number,
+      PreconditionRelaxation<LevelMatrixType, SmootherPreconditionerType>>;
     using MGSmootherType =
       MGSmootherPrecondition<LevelMatrixType, SmootherType, BlockVectorType>;
 

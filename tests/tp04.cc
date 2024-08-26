@@ -246,7 +246,7 @@ run_idx_tests(bool         is_variable_major,
               unsigned int n_timedofs)
 {
   block_indexing::set_variable_major(is_variable_major);
-  block_indexing indexer(n_timesteps_at_once, n_variables, n_timedofs);
+  BlockSlice indexer(n_timesteps_at_once, n_variables, n_timedofs);
 
   std::cout << "Testing "
             << (is_variable_major ? "variable-major" : "timedof-major")
@@ -255,8 +255,9 @@ run_idx_tests(bool         is_variable_major,
     for (unsigned int variable = 0; variable < n_variables; ++variable)
       for (unsigned int timedof = 0; timedof < n_timedofs; ++timedof)
         {
-          unsigned int index = indexer(timestep, variable, timedof);
-          auto [dec_timestep, dec_variable, dec_timedof] = indexer(index);
+          unsigned int index = indexer.index(timestep, variable, timedof);
+          auto [dec_timestep, dec_variable, dec_timedof] =
+            indexer.decompose(index);
           std::cout << "Computed Index: " << index << " Decomposed: "
                     << "Timestep: " << dec_timestep
                     << ", variable: " << dec_variable
@@ -267,6 +268,17 @@ run_idx_tests(bool         is_variable_major,
                           " [FAIL]")
                     << std::endl;
         }
+  for (unsigned int timestep = 0; timestep < n_timesteps_at_once; ++timestep)
+    for (unsigned int timedof = 0; timedof < n_timedofs; ++timedof)
+      {
+        std::vector<unsigned int> l(n_variables);
+        unsigned int              n =
+          -n_timedofs + timedof + timestep * n_timedofs * n_variables;
+        std::generate(l.begin(), l.end(), [&] { return n += n_timedofs; });
+        auto const vv = indexer.get_variable(timestep, timedof);
+        std::cout << "get_variable: " << (l == vv ? " [PASS]" : " [FAIL]")
+                  << std::endl;
+      }
 }
 
 int

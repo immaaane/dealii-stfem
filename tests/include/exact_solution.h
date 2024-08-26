@@ -314,6 +314,181 @@ namespace stokes
   };
 } // namespace stokes
 
+
+namespace stokespoly
+{
+  template <int dim, typename Number>
+  class ExactSolutionU : public Function<dim, Number>
+  {
+  public:
+    ExactSolutionU()
+      : Function<dim, Number>(2)
+    {}
+
+    Number
+    value(Point<dim> const  &x,
+          unsigned int const component) const override final
+    {
+      using std::pow;
+      const Number t = this->get_time();
+      if (component == 0)
+        return 1000 * t * pow(x(0), 2) * pow(1 - x(0), 4) * pow(x(1), 2) *
+               (1 - x(1)) * (3 - 5 * x(1));
+      if (component == 1)
+        return 1000 * t * -2 * x(0) * pow(1 - x(0), 3) * (1 - 3 * x(0)) *
+               pow(x(1), 3) * pow(1 - x(1), 2);
+      return 0.0;
+    }
+    Tensor<1, dim, Number>
+    gradient(const Point<dim>  &x,
+             const unsigned int component) const override final
+    {
+      Tensor<1, dim, Number> grad;
+      using std::pow;
+      const Number t = this->get_time();
+      if (component == 0)
+        {
+          grad[0] = 2000 * t * pow(1 - x(0), 4) * x(0) * (3 - 5 * x(1)) *
+                      (1 - x(1)) * pow(x(1), 2) -
+                    4000 * t * pow(1 - x(0), 3) * pow(x(0), 2) *
+                      (3 - 5 * x(1)) * (1 - x(1)) * pow(x(1), 2);
+          grad[1] = 2000 * t * pow(1 - x(0), 4) * pow(x(0), 2) *
+                      (3 - 5 * x(1)) * (1 - x(1)) * x(1) -
+                    1000 * t * pow(1 - x(0), 4) * pow(x(0), 2) *
+                      (3 - 5 * x(1)) * pow(x(1), 2) -
+                    5000 * t * pow(1 - x(0), 4) * pow(x(0), 2) * (1 - x(1)) *
+                      pow(x(1), 2);
+        }
+      else if (component == 1)
+        {
+          grad[0] = -2000 * t * (1 - 3 * x(0)) * pow(1 - x(0), 3) *
+                      pow(1 - x(1), 2) * pow(x(1), 3) +
+                    6000 * t * (1 - 3 * x(0)) * pow(1 - x(0), 2) * x(0) *
+                      pow(1 - x(1), 2) * pow(x(1), 3) +
+                    6000 * t * pow(1 - x(0), 3) * x(0) * pow(1 - x(1), 2) *
+                      pow(x(1), 3);
+          grad[1] = -6000 * t * (1 - 3 * x(0)) * pow(1 - x(0), 3) * x(0) *
+                      pow(1 - x(1), 2) * pow(x(1), 2) +
+                    4000 * t * (1 - 3 * x(0)) * pow(1 - x(0), 3) * x(0) *
+                      (1 - x(1)) * pow(x(1), 3);
+        }
+      return grad;
+    }
+  };
+
+
+  template <int dim, typename Number>
+  class ExactSolutionP : public Function<dim, Number>
+  {
+  public:
+    ExactSolutionP()
+      : Function<dim, Number>()
+    {}
+
+    Number
+    value(Point<dim> const &x, unsigned int const) const override final
+    {
+      const Number t = this->get_time();
+      return t * (-4 * 4 * x(0) * (1 - x(0)) * x(1) * (1 - x(1)) + 4. / 9.);
+    }
+    Tensor<1, dim, Number>
+    gradient(const Point<dim> &x, const unsigned int) const override final
+    {
+      const Number           t = this->get_time();
+      Tensor<1, dim, Number> grad;
+      grad[0] = -16 * t * (1 - 2 * x(0)) * x(1) * (1 - x(1));
+      grad[1] = -16 * t * x(0) * (1 - x(0)) * (1 - 2 * x(1));
+      return grad;
+    }
+  };
+
+  template <int dim, typename Number>
+  class RHSFunction : public Function<dim, Number>
+  {
+  public:
+    RHSFunction(Number viscosity_, bool)
+      : Function<dim, Number>(2)
+      , viscosity(viscosity_)
+    {}
+
+    Number
+    value(Point<dim> const  &x,
+          unsigned int const component) const override final
+    {
+      const Number t = this->get_time();
+      if (component == 0)
+        return (5000 * pow(x(0), 6) - 20000 * pow(x(0), 5) +
+                (30000 - 150000 * viscosity * t) * pow(x(0), 4) +
+                (400000 * viscosity * t - 20000) * pow(x(0), 3) +
+                (5000 - 360000 * viscosity * t) * pow(x(0), 2) +
+                120000 * viscosity * t * x(0) - 10000 * viscosity * t) *
+                 pow(x(1), 4) +
+               (-(8000 * pow(x(0), 6)) + 32000 * pow(x(0), 5) +
+                (240000 * viscosity * t - 48000) * pow(x(0), 4) +
+                (32000 - 640000 * viscosity * t) * pow(x(0), 3) +
+                (576000 * viscosity * t - 8000) * pow(x(0), 2) -
+                192000 * viscosity * t * x(0) + 16000 * viscosity * t) *
+                 pow(x(1), 3) +
+               ((3000 - 60000 * viscosity * t) * pow(x(0), 6) +
+                (240000 * viscosity * t - 12000) * pow(x(0), 5) +
+                (18000 - 450000 * viscosity * t) * pow(x(0), 4) +
+                (480000 * viscosity * t - 12000) * pow(x(0), 3) +
+                (3000 - 276000 * viscosity * t) * pow(x(0), 2) +
+                (72000 * viscosity - 32) * t * x(0) +
+                (16 - 6000 * viscosity) * t) *
+                 pow(x(1), 2) +
+               (48000 * viscosity * t * pow(x(0), 6) -
+                192000 * viscosity * t * pow(x(0), 5) +
+                288000 * viscosity * t * pow(x(0), 4) -
+                192000 * viscosity * t * pow(x(0), 3) +
+                48000 * viscosity * t * pow(x(0), 2) + 32 * t * x(0) - 16 * t) *
+                 x(1) -
+               6000 * viscosity * t * pow(x(0), 6) +
+               24000 * viscosity * t * pow(x(0), 5) -
+               36000 * viscosity * t * pow(x(0), 4) +
+               24000 * viscosity * t * pow(x(0), 3) -
+               6000 * viscosity * t * pow(x(0), 2);
+      else if (component == 1)
+        return (-(6000 * pow(x(0), 5)) + 20000 * pow(x(0), 4) +
+                (120000 * viscosity * t - 24000) * pow(x(0), 3) +
+                (12000 - 240000 * viscosity * t) * pow(x(0), 2) +
+                (144000 * viscosity * t - 2000) * x(0) -
+                24000 * viscosity * t) *
+                 pow(x(1), 5) +
+               (12000 * pow(x(0), 5) - 40000 * pow(x(0), 4) +
+                (48000 - 240000 * viscosity * t) * pow(x(0), 3) +
+                (480000 * viscosity * t - 24000) * pow(x(0), 2) +
+                (4000 - 288000 * viscosity * t) * x(0) +
+                48000 * viscosity * t) *
+                 pow(x(1), 4) +
+               ((120000 * viscosity * t - 6000) * pow(x(0), 5) +
+                (20000 - 400000 * viscosity * t) * pow(x(0), 4) +
+                (600000 * viscosity * t - 24000) * pow(x(0), 3) +
+                (12000 - 480000 * viscosity * t) * pow(x(0), 2) +
+                (184000 * viscosity * t - 2000) * x(0) -
+                24000 * viscosity * t) *
+                 pow(x(1), 3) +
+               (-(144000 * viscosity * t * pow(x(0), 5)) +
+                480000 * viscosity * t * pow(x(0), 4) -
+                576000 * viscosity * t * pow(x(0), 3) +
+                288000 * viscosity * t * pow(x(0), 2) -
+                48000 * viscosity * t * x(0)) *
+                 pow(x(1), 2) +
+               (36000 * viscosity * t * pow(x(0), 5) -
+                120000 * viscosity * t * pow(x(0), 4) +
+                144000 * viscosity * t * pow(x(0), 3) +
+                (-(72000 * viscosity) - 32) * t * pow(x(0), 2) +
+                (12000 * viscosity + 32) * t * x(0)) *
+                 x(1) +
+               16 * t * pow(x(0), 2) - 16 * t * x(0);
+      return 0;
+    }
+
+  private:
+    Number viscosity = 1.;
+  };
+} // namespace stokespoly
+
 template <int dim, typename Number>
 class ErrorCalculator
 {
@@ -334,6 +509,8 @@ public:
                        VectorType const &,
                        unsigned int)> evaluate_numerical_solution_)
     : time_step_type(type_)
+    , nt_dofs((time_step_type == TimeStepType::DG) ? time_degree + 1 :
+                                                     time_degree)
     , quad_cell(space_degree + 1)
     , quad_time(time_degree + 1)
     , mapping(mapping_)
@@ -347,12 +524,15 @@ public:
                  const double           time_step,
                  BlockVectorType const &x,
                  VectorType const      &prev_x,
-                 unsigned int           n_time_steps_at_once) const
+                 unsigned int           n_time_steps_at_once,
+                 bool                   calculate_divergence = false) const
   {
     std::unordered_map<VectorTools::NormType, double> error{
       {VectorTools::L2_norm, 0.0},
       {VectorTools::Linfty_norm, -1.0},
       {VectorTools::H1_seminorm, 0.0}};
+    if (calculate_divergence)
+      error.emplace(VectorTools::Hdiv_seminorm, 0.0);
     auto const &tq = quad_time.get_points();
     auto const &tw = quad_time.get_weights();
 
@@ -362,8 +542,6 @@ public:
     for (unsigned int i = 0; i < x.n_blocks(); ++i)
       x.block(i).update_ghost_values();
     prev_x.update_ghost_values();
-    auto nt_dofs =
-      static_cast<unsigned int>(x.n_blocks() / n_time_steps_at_once);
     double time_;
     for (unsigned int it = 0; it < n_time_steps_at_once; ++it)
       for (unsigned q = 0; q < quad_time.size(); ++q)
@@ -418,6 +596,23 @@ public:
             differences_per_cell,
             dealii::VectorTools::H1_seminorm);
           error[VectorTools::H1_seminorm] += time_step * tw[q] * h1 * h1;
+          if (calculate_divergence)
+            {
+              dealii::VectorTools::integrate_difference(
+                mapping,
+                dof_handler,
+                numeric,
+                exact_solution,
+                differences_per_cell,
+                quad_cell,
+                dealii::VectorTools::Hdiv_seminorm);
+              double hdiv = dealii::VectorTools::compute_global_error(
+                dof_handler.get_triangulation(),
+                differences_per_cell,
+                dealii::VectorTools::Hdiv_seminorm);
+              error[VectorTools::Hdiv_seminorm] +=
+                time_step * tw[q] * hdiv * hdiv;
+            }
           numeric.zero_out_ghost_values();
         }
     for (unsigned int i = 0; i < x.n_blocks(); ++i)
@@ -428,6 +623,7 @@ public:
 
 private:
   TimeStepType           time_step_type;
+  unsigned int           nt_dofs;
   QGauss<dim> const      quad_cell;
   QGauss<1> const        quad_time;
   const Mapping<dim>    &mapping;
