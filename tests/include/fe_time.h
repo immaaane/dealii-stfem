@@ -528,22 +528,11 @@ namespace dealii
        FullMatrix<Number>(time_weights[0].m(), time_weights[0].n() - 1),
        FullMatrix<Number>(time_weights[0].m(), 1),
        FullMatrix<Number>(time_weights[0].m(), 1)}};
-
-    // Generate indices for the last columns (LHS) and the first column (RHS)
-    std::vector<unsigned> lhs_indices(time_weights[0].n() - 1);
-    std::iota(lhs_indices.begin(), lhs_indices.end(), 1);
-    std::vector<unsigned> const rhs_indices{0};
-
-    // Generate row indices
-    std::vector<unsigned> row_indices(time_weights[0].m());
-    std::iota(row_indices.begin(), row_indices.end(), 0);
-
     // Scatter matrices
-    ret[0].extract_submatrix_from(time_weights[0], row_indices, lhs_indices);
-    ret[1].extract_submatrix_from(time_weights[1], row_indices, lhs_indices);
-    ret[2].extract_submatrix_from(time_weights[0], row_indices, rhs_indices);
-    ret[3].extract_submatrix_from(time_weights[1], row_indices, rhs_indices);
-
+    ret[0].fill(time_weights[0], 0, 0, 0, 1);
+    ret[1].fill(time_weights[1], 0, 0, 0, 1);
+    ret[2].fill(time_weights[0], 0, 0, 0, 0);
+    ret[3].fill(time_weights[1], 0, 0, 0, 0);
     ret[2] *= -1.0;
     ret[3] *= -1.0;
     return ret;
