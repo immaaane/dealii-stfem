@@ -553,6 +553,11 @@ namespace dealii
   std::array<FullMatrix<Number>, 2>
   get_cg_weights(unsigned int const r)
   {
+    static std::unordered_map<unsigned int, std::array<FullMatrix<Number>, 2>>
+      cache;
+    if (auto it = cache.find(r); it != cache.end())
+      return it->second;
+
     auto const trial_points = QGaussLobatto<1>(r + 1).get_points();
     std::vector<Point<1>> const test_points(trial_points.begin() + 1,
                                             trial_points.end());
@@ -587,13 +592,19 @@ namespace dealii
             quad.weight(q) * poly_test[i].value(quad.point(q)[0]) *
             poly_lobatto_derivative[j].value(quad.point(q)[0]);
 
-    return {{matrix, matrix_der}};
+    cache[r] = {{matrix, matrix_der}};
+    return cache[r];
   }
 
   template <typename Number>
   std::array<FullMatrix<Number>, 3>
   get_dg_weights(unsigned int const r)
   {
+    static std::unordered_map<unsigned int, std::array<FullMatrix<Number>, 3>>
+      cache;
+    if (auto it = cache.find(r); it != cache.end())
+      return it->second;
+
     // Radau quadrature
     auto const poly_radau = get_time_basis(TimeStepType::DG, r);
 
@@ -630,7 +641,9 @@ namespace dealii
               quad.weight(q) * poly_radau[i].value(quad.point(q)[0]) *
               poly_radau_derivative[j].value(quad.point(q)[0]);
         }
-    return {{lhs_matrix, lhs_matrix_der, jump_matrix}};
+
+    cache[r] = {{lhs_matrix, lhs_matrix_der, jump_matrix}};
+    return cache[r];
   }
 
   std::vector<size_t>
