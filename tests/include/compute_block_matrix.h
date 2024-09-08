@@ -303,7 +303,7 @@ namespace dealii
     return {Is...};
   }
   template <typename T1, typename T2>
-  auto
+  std::pair<T1 &&, T2 &&>
   forward_as_pair(T1 &&first, T2 &&second)
   {
     return std::pair<T1 &&, T2 &&>(std::forward<T1>(first),
@@ -332,18 +332,24 @@ namespace dealii
             typename VectorizedArrayType,
             bool is_face,
             typename... FaceEvalTypes,
+            typename Function,
             std::size_t... Is>
-  auto
-  generate_pair_tuple_from_vector(
-    std::vector<
-      std::unique_ptr<FEEvaluationData<dim, VectorizedArrayType, is_face>>>
-      &phi,
-    std::index_sequence<Is...>)
+  void
+  face_apply(Function &&face_operation,
+             std::vector<std::unique_ptr<
+               FEEvaluationData<dim, VectorizedArrayType, is_face>>> &phi,
+             std::index_sequence<Is...>)
   {
-    return std::forward_as_tuple(
-      forward_as_pair(static_cast<FaceEvalTypes &>(*phi[Is * 2]),
-                      static_cast<FaceEvalTypes &>(*phi[Is * 2 + 1]))...);
+    static_assert(sizeof...(Is) == sizeof...(FaceEvalTypes),
+                  "Index sequence size must match number of FaceEvalTypes");
+    Assert(phi.size() >= 2 * sizeof...(Is),
+           ExcLowerRange(phi.size(), 2 * sizeof...(Is)));
+    std::apply(face_operation,
+               std::forward_as_tuple(forward_as_pair(
+                 static_cast<FaceEvalTypes &>(*phi[Is * 2]),
+                 static_cast<FaceEvalTypes &>(*phi[Is * 2 + 1]))...));
   }
+
 
   template <int dim,
             typename Number,
@@ -506,12 +512,12 @@ namespace dealii
             typename... FaceEvalTypes>
   void
   compute_matrix(
-    const MatrixFree<dim, Number, VectorizedArrayType> &matrix_free,
-    const dealii::AffineConstraints<Number>            &constraints,
-    BlockMatrixType                                    &matrix,
-    const std::function<void(CellEvalTypes &...)>      &cell_operation,
-    const std::function<void(std::pair<FaceEvalTypes &, FaceEvalTypes &>...)>
-                                                  &face_operation,
+    const MatrixFree<dim, Number, VectorizedArrayType>         &matrix_free,
+    const dealii::AffineConstraints<Number>                    &constraints,
+    BlockMatrixType                                            &matrix,
+    const std::function<void(CellEvalTypes &...)>              &cell_operation,
+    const std::function<void(
+      std::pair<FaceEvalTypes &, FaceEvalTypes &> const &...)> &face_operation,
     const std::function<void(FaceEvalTypes &...)> &boundary_operation)
   {
     std::vector<const dealii::AffineConstraints<Number> *> constraints_{
@@ -535,15 +541,15 @@ namespace dealii
     const MatrixFree<dim, Number, VectorizedArrayType>           &matrix_free,
     const std::vector<const dealii::AffineConstraints<Number> *> &constraints,
     BlockMatrixType                                              &matrix,
-    const std::function<void(CellEvalTypes &...)> &cell_operation,
-    const std::function<void(std::pair<FaceEvalTypes &, FaceEvalTypes &>...)>
-                                                  &face_operation,
+    const std::function<void(CellEvalTypes &...)>              &cell_operation,
+    const std::function<void(
+      std::pair<FaceEvalTypes &, FaceEvalTypes &> const &...)> &face_operation,
     const std::function<void(FaceEvalTypes &...)> &boundary_operation)
   {
     auto cell_eval_index    = std::index_sequence_for<CellEvalTypes...>{};
     auto face_eval_index    = std::index_sequence_for<FaceEvalTypes...>{};
-    auto in_face_eval_index = even_sequence<sizeof...(FaceEvalTypes)>{};
-    auto ex_face_eval_index = odd_sequence<sizeof...(FaceEvalTypes)>{};
+    auto in_face_eval_index = even_sequence<2 * sizeof...(FaceEvalTypes)>{};
+    auto ex_face_eval_index = odd_sequence<2 * sizeof...(FaceEvalTypes)>{};
     MatrixFreeTools::internal::
       ComputeMatrixScratchData<dim, VectorizedArrayType, false>
         data_cell;
@@ -630,13 +636,8 @@ namespace dealii
 
     if (face_operation)
       data_face.op_compute = [&](auto &phi) {
-        auto phi_tuple =
-          generate_pair_tuple_from_vector<dim,
-                                          VectorizedArrayType,
-                                          true,
-                                          FaceEvalTypes...>(phi,
-                                                            face_eval_index);
-        std::apply(face_operation, phi_tuple);
+        face_apply<dim, VectorizedArrayType, true, FaceEvalTypes...>(
+          face_operation, phi, face_eval_index);
       };
 
     MatrixFreeTools::internal::
@@ -764,7 +765,7 @@ namespace dealii
     BlockMatrixType                                    &matrix,
     void (CLASS::*cell_operation)(CellEvalTypes &...) const,
     void (CLASS::*face_operation)(
-      std::pair<FaceEvalTypes &, FaceEvalTypes &>...) const,
+      std::pair<FaceEvalTypes &, FaceEvalTypes &> const &...) const,
     void (CLASS::*boundary_operation)(FaceEvalTypes &...) const,
     const CLASS *owning_class)
   {
@@ -793,23 +794,32 @@ namespace dealii
     BlockMatrixType                                              &matrix,
     void (CLASS::*cell_operation)(CellEvalTypes &...) const,
     void (CLASS::*face_operation)(
-      std::pair<FaceEvalTypes &, FaceEvalTypes &>...) const,
+      std::pair<FaceEvalTypes &, FaceEvalTypes &> const &...) const,
     void (CLASS::*boundary_operation)(FaceEvalTypes &...) const,
     const CLASS *owning_class)
   {
-    compute_matrix(
-      matrix_free,
-      constraints,
-      matrix,
-      [&](CellEvalTypes &...evals) {
+    std::function<void(CellEvalTypes & ...)> cell_op_func =
+      [&owning_class, &cell_operation](CellEvalTypes &...evals) {
         (owning_class->*cell_operation)(evals...);
-      },
-      [&](std::pair<FaceEvalTypes &, FaceEvalTypes &>... face_evals) {
-        (owning_class->*face_operation)(face_evals...);
-      },
-      [&](FaceEvalTypes &...boundary_evals) {
+      };
+
+    std::function<void(std::pair<FaceEvalTypes &, FaceEvalTypes &> const &...)>
+      face_op_func =
+        [&owning_class, &face_operation](
+          std::pair<FaceEvalTypes &, FaceEvalTypes &> const &...face_evals) {
+          (owning_class->*face_operation)(face_evals...);
+        };
+    std::function<void(FaceEvalTypes & ...)> boundary_op_func =
+      [&owning_class, &boundary_operation](FaceEvalTypes &...boundary_evals) {
         (owning_class->*boundary_operation)(boundary_evals...);
-      });
+      };
+
+    compute_matrix(matrix_free,
+                   constraints,
+                   matrix,
+                   cell_op_func,
+                   face_op_func,
+                   boundary_op_func);
   }
 
 
