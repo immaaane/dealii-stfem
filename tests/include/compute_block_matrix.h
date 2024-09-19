@@ -848,6 +848,8 @@ namespace dealii
     const unsigned int quad_c_no                  = 0,
     const unsigned int first_selected_r_component = 0,
     const unsigned int first_selected_c_component = 0)
-  {}
+  {
+    DEAL_II_NOT_IMPLEMENTED();
+  }
 
 } // namespace dealii
