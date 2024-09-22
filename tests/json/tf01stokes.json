@@ -1,6 +1,7 @@
 {
-    "doOutput"               : "false",
+    "doOutput"               : "true",
     "printTiming"            : "false",
+    "colorizeBoundary"       : "false",
     "spaceTimeMg"            : "true",
     "mgTimeBeforeSpace"      : "false",
     "timeType"               : "DG",
@@ -15,6 +16,7 @@
     "frequency"              : "1.0",
     "extrapolate"            : "true",
     "refinement"             : "1",
-    "meanPressure"           : "true",
-    "viscosity"              : "1"
+    "smoothingSteps"         : "1",
+    "smoothingRange"         : "5.0",
+    "additionalFile"         : "tests/json/stokes.json"
 }

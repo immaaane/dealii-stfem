@@ -131,9 +131,11 @@ test(dealii::ConditionalOStream &pcout,
 
     FullMatrix<Number> lhs_uK, lhs_uM, rhs_uK, rhs_uM, rhs_vM,
       zero(Gamma.m(), Gamma.n());
-    using SystemN = SystemMatrix<Number, MatrixFreeOperatorScalar<dim, Number>>;
+    using SystemN =
+      SystemMatrix<dim, Number, MatrixFreeOperatorScalar<dim, Number>>;
     using SystemNP =
-      SystemMatrix<NumberPreconditioner,
+      SystemMatrix<dim,
+                   NumberPreconditioner,
                    MatrixFreeOperatorScalar<dim, NumberPreconditioner>>;
 
     std::unique_ptr<SystemN> rhs_matrix, rhs_matrix_v, matrix;

@@ -501,17 +501,23 @@ namespace dealii
     return time_weights_wave;
   }
 
+  Quadrature<1>
+  get_time_quad(TimeStepType type, unsigned int const r)
+  {
+    if (type == TimeStepType::DG)
+      return QGaussRadau<1>(r + 1, QGaussRadau<1>::EndPoint::right);
+    else if (type == TimeStepType::CGP)
+      return QGaussLobatto<1>(r + 1);
+    else
+      return Quadrature<1>();
+  }
+
   std::vector<Polynomials::Polynomial<double>>
   get_time_basis(TimeStepType type, unsigned int const r)
   {
-    if (type == TimeStepType::CGP)
-      return Polynomials::generate_complete_Lagrange_basis(
-        QGaussLobatto<1>(r + 1).get_points());
-    else if (type == TimeStepType::DG)
-      return Polynomials::generate_complete_Lagrange_basis(
-        QGaussRadau<1>(r + 1, QGaussRadau<1>::EndPoint::right).get_points());
-
-    return {{}};
+    auto quad_time = get_time_quad(type, r);
+    return Polynomials::generate_complete_Lagrange_basis(
+      quad_time.get_points());
   }
 
 

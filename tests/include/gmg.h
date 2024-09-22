@@ -22,6 +22,7 @@
 
 #include "compute_block_matrix.h"
 #include "fe_time.h"
+#include "stokes.h"
 #include "types.h"
 
 enum class TransferType : bool
@@ -855,7 +856,7 @@ namespace dealii
 
   struct PreconditionerGMGAdditionalData
   {
-    double       smoothing_range               = 0.0;
+    double       smoothing_range               = 1;
     unsigned int smoothing_degree              = 5;
     unsigned int smoothing_eig_cg_n_iterations = 20;
     unsigned int smoothing_steps               = 1;
@@ -892,10 +893,15 @@ namespace dealii
     unsigned int n_deg_cycles            = 1;
     unsigned int n_ref_cycles            = 1;
     double       frequency               = 1.0;
+    double       rel_tol                 = 1.0e-12;
     int          refinement              = 2;
     bool         space_time_conv_test    = true;
     bool         extrapolate             = true;
+    bool         colorize_boundary       = false;
+    bool         nitsche_boundary        = false;
     std::string  functional_file         = "functionals.txt";
+    std::string  grid_descriptor         = "hyperRectangle";
+    std::string  additional_file         = "";
     Point<dim>   hyperrect_lower_left =
       dim == 2 ? Point<dim>(0., 0.) : Point<dim>(0., 0., 0.);
     Point<dim> hyperrect_upper_right =
@@ -903,10 +909,9 @@ namespace dealii
     std::vector<unsigned int> subdivisions  = std::vector<unsigned int>(dim, 1);
     double                    distort_grid  = 0.0;
     double                    distort_coeff = 0.0;
-    double                    viscosity     = 1.0;
-    bool                      mean_pressure = space_time_conv_test;
     Point<dim> source = .5 * hyperrect_lower_left + .5 * hyperrect_upper_right;
     double     end_time = 1.0;
+
 
     PreconditionerGMGAdditionalData mg_data;
     void
@@ -930,22 +935,26 @@ namespace dealii
       prm.add_parameter("nDegCycles", n_deg_cycles);
       prm.add_parameter("nRefCycles", n_ref_cycles);
       prm.add_parameter("frequency", frequency);
+      prm.add_parameter("relativeTolerance", rel_tol);
       prm.add_parameter("refinement", refinement);
       prm.add_parameter("spaceTimeConvergenceTest", space_time_conv_test);
       prm.add_parameter("extrapolate", extrapolate);
+      prm.add_parameter("colorizeBoundary", colorize_boundary);
+      prm.add_parameter("nitscheBoundary", nitsche_boundary);
       prm.add_parameter("functionalFile", functional_file);
+      prm.add_parameter("gridDescriptor", grid_descriptor);
+      prm.add_parameter("additionalFile", additional_file);
       prm.add_parameter("hyperRectLowerLeft", hyperrect_lower_left);
       prm.add_parameter("hyperRectUpperRight", hyperrect_upper_right);
       prm.add_parameter("subdivisions", subdivisions);
       prm.add_parameter("distortGrid", distort_grid);
       prm.add_parameter("distortCoeff", distort_coeff);
-      prm.add_parameter("viscosity", viscosity);
-      prm.add_parameter("meanPressure", mean_pressure);
       prm.add_parameter("sourcePoint", source);
       prm.add_parameter("endTime", end_time);
 
       prm.add_parameter("smoothingDegree", mg_data.smoothing_degree);
       prm.add_parameter("smoothingSteps", mg_data.smoothing_steps);
+      prm.add_parameter("smoothingRange", mg_data.smoothing_range);
       prm.add_parameter("estimateRelaxation", mg_data.estimate_relaxation);
       prm.add_parameter("coarseGridSmootherType",
                         mg_data.coarse_grid_smoother_type);
@@ -958,7 +967,6 @@ namespace dealii
       AssertIsFinite(frequency);
       AssertIsFinite(distort_grid);
       AssertIsFinite(distort_coeff);
-      AssertIsFinite(viscosity);
       AssertIsFinite(end_time);
 
       std::ifstream file;
@@ -992,7 +1000,9 @@ namespace dealii
     using MGTransferType = STMGTransferBlockMatrixFree<dim, Number>;
 
     using SmootherPreconditionerType = PreconditionVanka<Number>;
-    using SmootherType               = PreconditionSTMG<
+    using CoarsePreconditionerType =
+      PreconditionRelaxation<LevelMatrixType, SmootherPreconditionerType>;
+    using SmootherType = PreconditionSTMG<
       Number,
       PreconditionRelaxation<LevelMatrixType, SmootherPreconditionerType>>;
     using MGSmootherType =
@@ -1151,40 +1161,36 @@ namespace dealii
 
       if (additional_data.coarse_grid_smoother_type != "Smoother")
         {
-          solver_control_coarse = std::make_unique<ReductionControl>(
+          solver_control_coarse = std::make_unique<IterationNumberControl>(
             additional_data.coarse_grid_maxiter,
             additional_data.coarse_grid_abstol,
-            additional_data.coarse_grid_reltol,
             false,
             false);
           typename SolverGMRES<BlockVectorType>::AdditionalData const
-            gmres_additional_data(10);
+            gmres_additional_data(additional_data.coarse_grid_maxiter);
           gmres_coarse = std::make_unique<SolverGMRES<BlockVectorType>>(
             *solver_control_coarse, gmres_additional_data);
+          typename CoarsePreconditionerType::AdditionalData coarse_precon_data;
+          coarse_precon_data.relaxation =
+            additional_data.estimate_relaxation ? 0.0 : 1.0;
+          coarse_precon_data.n_iterations   = additional_data.smoothing_steps;
+          coarse_precon_data.preconditioner = precondition_vanka[min_level];
+          coarse_precon_data.eigenvalue_algorithm =
+            internal::EigenvalueAlgorithm::power_iteration;
+          coarse_precon_data.eig_cg_n_iterations =
+            additional_data.smoothing_eig_cg_n_iterations;
+          coarse_precon_data.smoothing_range = additional_data.smoothing_range;
 
-          auto diagonal_matrix =
-            mg_operators[min_level]->get_matrix_diagonal_inverse();
-
-          typename PreconditionRelaxation<
-            LevelMatrixType,
-            DiagonalMatrix<BlockVectorType>>::AdditionalData coarse_precon_data;
-          coarse_precon_data.relaxation     = 0.9;
-          coarse_precon_data.n_iterations   = 1;
-          coarse_precon_data.preconditioner = diagonal_matrix;
-
-          preconditioner_coarse = std::make_unique<
-            PreconditionRelaxation<LevelMatrixType,
-                                   DiagonalMatrix<BlockVectorType>>>();
-          preconditioner_coarse->initialize(*(mg_operators[min_level]),
+          coarse_preconditioner = std::make_unique<CoarsePreconditionerType>();
+          coarse_preconditioner->initialize(*(mg_operators[min_level]),
                                             coarse_precon_data);
 
-          mg_coarse = std::make_unique<dealii::MGCoarseGridIterativeSolver<
-            BlockVectorType,
-            SolverGMRES<BlockVectorType>,
-            LevelMatrixType,
-            PreconditionRelaxation<LevelMatrixType,
-                                   DiagonalMatrix<BlockVectorType>>>>(
-            *gmres_coarse, *mg_operators[min_level], *preconditioner_coarse);
+          mg_coarse = std::make_unique<
+            dealii::MGCoarseGridIterativeSolver<BlockVectorType,
+                                                SolverGMRES<BlockVectorType>,
+                                                LevelMatrixType,
+                                                CoarsePreconditionerType>>(
+            *gmres_coarse, *mg_operators[min_level], *coarse_preconditioner);
         }
       else
         {
@@ -1268,9 +1274,7 @@ namespace dealii
     mutable std::unique_ptr<MGCoarseGridBase<BlockVectorType>> mg_coarse;
     mutable std::unique_ptr<SolverControl>                solver_control_coarse;
     mutable std::unique_ptr<SolverGMRES<BlockVectorType>> gmres_coarse;
-    mutable std::unique_ptr<
-      PreconditionRelaxation<LevelMatrixType, DiagonalMatrix<BlockVectorType>>>
-      preconditioner_coarse;
+    mutable std::unique_ptr<CoarsePreconditionerType>     coarse_preconditioner;
 
     mutable std::unique_ptr<Multigrid<BlockVectorType>> mg;
 

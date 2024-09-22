@@ -1,0 +1,7 @@
+{
+    "computeDragLift"        : "false",
+    "meanPressure"           : "true",
+    "viscosity"              : "1.0",
+    "dfgBenchmark"           : "0",
+    "dGPressure"             : "true"
+}

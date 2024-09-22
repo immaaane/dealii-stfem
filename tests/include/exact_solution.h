@@ -16,6 +16,14 @@ using namespace dealii;
 using dealii::numbers::PI;
 
 template <int dim, typename Number>
+bool
+is_zero_function(Function<dim, Number> *const f)
+{
+  return dynamic_cast<Functions::ZeroFunction<dim, Number> *const>(f) !=
+         nullptr;
+}
+
+template <int dim, typename Number>
 class ExactSolution : public Function<dim, Number>
 {
 public:

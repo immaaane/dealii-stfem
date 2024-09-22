@@ -1,0 +1,10 @@
+{
+    "computeDragLift"        : "true",
+    "rho"                    : "1",
+    "characteristicDiam"     : "0.1",
+    "uMean"                  : "1.0",
+    "meanPressure"           : "false",
+    "viscosity"              : "1.e-3",
+    "dfgBenchmark"           : "1",
+    "dGPressure"             : "true"
+}

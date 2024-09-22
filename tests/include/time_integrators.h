@@ -12,13 +12,20 @@
 
 namespace dealii
 {
+  struct EmptyNitsche
+  {};
+
   /** Time stepping by DG and CGP variational time discretizations
    *
    * This time integrator is suited for linear problems. For nonlinear problems
    * we would need a few extensions in order to integrate nonlinear terms
    * accurately.
    */
-  template <int dim, typename Number, typename Preconditioner, typename System>
+  template <int dim,
+            typename Number,
+            typename Preconditioner,
+            typename System,
+            typename NitscheIntegrator = EmptyNitsche>
   class TimeIntegrator
   {
   public:
@@ -34,11 +41,13 @@ namespace dealii
                    Preconditioner const     &preconditioner_,
                    System const             &rhs_matrix_,
                    std::vector<std::function<void(const double, VectorType &)>>
-                                integrate_rhs_function,
-                   unsigned int n_timesteps_at_once_,
-                   bool         extrapolate_)
+                                            integrate_rhs_function,
+                   unsigned int             n_timesteps_at_once_,
+                   bool                     extrapolate_,
+                   const NitscheIntegrator &nitsche_ = NitscheIntegrator())
       : type(type_)
       , time_degree(time_degree_)
+      , quad_time(get_time_quad(type, time_degree))
       , Alpha(Alpha_)
       , Gamma(Gamma_)
       , solver_control(200, 1.e-12, gmres_tolerance_, false, true)
@@ -48,19 +57,15 @@ namespace dealii
       , preconditioner(preconditioner_)
       , matrix(matrix_)
       , rhs_matrix(rhs_matrix_)
+      , nitsche(nitsche_)
       , integrate_rhs_function(integrate_rhs_function)
       , n_timesteps_at_once(n_timesteps_at_once_)
       , idx(n_timesteps_at_once,
             integrate_rhs_function.size(),
             (type == TimeStepType::DG ? time_degree + 1 : time_degree))
+      , dirichlet_color_to_fun(idx.n_variables())
       , do_extrapolate(extrapolate_)
-    {
-      if (type == TimeStepType::DG)
-        quad_time =
-          QGaussRadau<1>(time_degree + 1, QGaussRadau<1>::EndPoint::right);
-      else if (type == TimeStepType::CGP)
-        quad_time = QGaussLobatto<1>(time_degree + 1);
-    }
+    {}
 
     void
     assemble_force(BlockVectorType &rhs,
@@ -82,19 +87,82 @@ namespace dealii
                 integrate_rhs_function[iv](time_, tmp.block(iv));
                 /// Here we exploit that Alpha is a diagonal matrix
                 if (type == TimeStepType::DG)
-                  rhs.block(idx(it, iv, j))
-                    .add(Alpha(idx(0, iv, j), idx(0, iv, j)), tmp.block(iv));
+                  rhs.block(idx.index(it, iv, j))
+                    .add(Alpha(idx.index(0, iv, j), idx.index(0, iv, j)),
+                         tmp.block(iv));
                 else
                   {
                     if (j == 0)
                       for (unsigned int i = 0; i < idx.n_timedofs(); ++i)
-                        rhs.block(idx(it, iv, i))
-                          .add(-Gamma(idx(0, iv, i), 0), tmp.block(iv));
+                        rhs.block(idx.index(it, iv, i))
+                          .add(-Gamma(idx.index(0, iv, i), 0), tmp.block(iv));
                     else
-                      rhs.block(idx(it, iv, j - 1))
-                        .add(Alpha(idx(0, iv, j - 1), idx(0, iv, j - 1)),
+                      rhs.block(idx.index(it, iv, j - 1))
+                        .add(Alpha(idx.index(0, iv, j - 1),
+                                   idx.index(0, iv, j - 1)),
                              tmp.block(iv));
                   }
+              }
+          }
+    }
+
+    void
+    add_dirichlet_function(unsigned int           var,
+                           types::boundary_id     b_id,
+                           Function<dim, Number> *f) const
+    {
+      dirichlet_color_to_fun[var].emplace(b_id, f);
+      dirichlet_function_added = true;
+    }
+
+    template <typename T = NitscheIntegrator>
+    typename std::enable_if<std::is_same<T, EmptyNitsche>::value>::type
+    assemble_nitsche(BlockVectorType &, double const, double const) const
+    {}
+
+    template <typename T = NitscheIntegrator>
+    typename std::enable_if<!std::is_same<T, EmptyNitsche>::value>::type
+    assemble_nitsche(BlockVectorType &rhs,
+                     double const     time_,
+                     double const     time_step) const
+    {
+      if (!dirichlet_function_added)
+        return;
+      AssertDimension(rhs.n_blocks(), idx.n_blocks());
+      BlockVectorType tmp(idx.n_variables());
+      nitsche.initialize_dof_vector(tmp);
+      for (unsigned int it = 0; it < idx.n_timesteps_at_once(); ++it)
+        for (unsigned int j = 0; j < quad_time.size(); ++j)
+          {
+            double time =
+              time_ + time_step * it + time_step * quad_time.point(j)[0];
+            for (unsigned int iv = 0; iv < idx.n_variables(); ++iv)
+              {
+                if (dirichlet_color_to_fun[iv].empty())
+                  continue;
+                for (auto &[bid, f] : dirichlet_color_to_fun[iv])
+                  f->set_time(time);
+                nitsche.set_dirichlet_functions(dirichlet_color_to_fun[iv]);
+
+                nitsche.vmult(tmp);
+                if (type == TimeStepType::DG)
+                  for (unsigned int jv = 0; jv < idx.n_variables(); ++jv)
+                    rhs.block(idx.index(it, jv, j))
+                      .add(Alpha(idx.index(0, iv, j), idx.index(0, jv, j)),
+                           tmp.block(jv));
+                else
+                  for (unsigned int jv = 0; jv < idx.n_variables(); ++jv)
+                    {
+                      if (j == 0)
+                        for (unsigned int i = 0; i < idx.n_timedofs(); ++i)
+                          rhs.block(idx.index(it, jv, i))
+                            .add(-Gamma(idx.index(0, iv, i), 0), tmp.block(jv));
+                      else
+                        rhs.block(idx.index(it, jv, j - 1))
+                          .add(Alpha(idx.index(0, iv, j - 1),
+                                     idx.index(0, iv, j - 1)),
+                               tmp.block(jv));
+                    }
               }
           }
     }
@@ -113,9 +181,9 @@ namespace dealii
         for (unsigned int i = 0; i < idx.n_variables(); ++i)
           for (unsigned int j = 0; j < idx.n_timedofs(); ++j)
             if (do_extrapolate)
-              x.block(idx(it, i, j)) = prev_x.block(i);
+              x.block(idx.index(it, i, j)) = prev_x.block(i);
             else
-              x.block(idx(it, i, j)) = 0.0;
+              x.block(idx.index(it, i, j)) = 0.0;
     }
 
     TimeStepType              type;
@@ -129,18 +197,31 @@ namespace dealii
     Preconditioner const                 &preconditioner;
     System const                         &matrix;
     System const                         &rhs_matrix;
+    NitscheIntegrator const              &nitsche;
     std::vector<std::function<void(const double, VectorType &)>>
-                   integrate_rhs_function;
-    unsigned int   n_timesteps_at_once;
-    block_indexing idx;
+                 integrate_rhs_function;
+    unsigned int n_timesteps_at_once;
+    BlockSlice   idx;
+
+    mutable std::vector<
+      std::map<types::boundary_id, dealii::Function<dim, Number> *>>
+                 dirichlet_color_to_fun;
+    mutable bool dirichlet_function_added = false;
 
     bool do_extrapolate;
   };
 
 
-  template <int dim, typename Number, typename Preconditioner, typename System>
-  class TimeIntegratorFO
-    : public TimeIntegrator<dim, Number, Preconditioner, System>
+  template <int dim,
+            typename Number,
+            typename Preconditioner,
+            typename System,
+            typename NitscheIntegrator = EmptyNitsche>
+  class TimeIntegratorFO : public TimeIntegrator<dim,
+                                                 Number,
+                                                 Preconditioner,
+                                                 System,
+                                                 NitscheIntegrator>
   {
   public:
     using VectorType =
@@ -159,10 +240,11 @@ namespace dealii
       Preconditioner const     &preconditioner_,
       System const             &rhs_matrix_,
       std::vector<std::function<void(const double, VectorType &)>>
-                   integrate_rhs_function,
-      unsigned int n_timesteps_at_once_,
-      bool         extrapolate = true)
-      : TimeIntegrator<dim, Number, Preconditioner, System>(
+                               integrate_rhs_function,
+      unsigned int             n_timesteps_at_once_,
+      bool                     extrapolate = true,
+      const NitscheIntegrator &nitsche     = NitscheIntegrator())
+      : TimeIntegrator<dim, Number, Preconditioner, System, NitscheIntegrator>(
           type_,
           time_degree_,
           Alpha_,
@@ -173,16 +255,18 @@ namespace dealii
           rhs_matrix_,
           integrate_rhs_function,
           n_timesteps_at_once_,
-          extrapolate)
+          extrapolate,
+          nitsche)
     {}
 
     void
-    solve(BlockVectorType                    &x,
-          const VectorType                   &prev_x,
-          [[maybe_unused]] const unsigned int timestep_number,
-          const double                        time,
-          const double                        time_step) const
+    solve(BlockVectorType   &x,
+          const VectorType  &prev_x,
+          const unsigned int timestep_number,
+          const double       time,
+          const double       time_step) const
     {
+      AssertDimension(this->idx.n_variables(), 1);
       BlockVectorType prev_x_(1);
       prev_x_.block(0).swap(const_cast<VectorType &>(prev_x));
       this->solve(x, prev_x_, timestep_number, time, time_step);
@@ -190,18 +274,15 @@ namespace dealii
     }
 
     void
-    solve(BlockVectorType                    &x,
-          BlockVectorType                    &prev_x,
-          [[maybe_unused]] const unsigned int timestep_number,
-          const double                        time,
-          const double                        time_step) const
+    solve(BlockVectorType &x,
+          BlockVectorType &prev_x,
+          BlockVectorType &rhs,
+          const unsigned int,
+          const double time,
+          const double time_step) const
     {
-      BlockVectorType rhs(x.n_blocks());
-      for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
-        rhs.block(j).reinit(x.block(j).get_partitioner());
-      // this->matrix.initialize_dof_vector(rhs.block(j));
       this->rhs_matrix.vmult_slice(rhs, prev_x);
-
+      this->assemble_nitsche(rhs, time, time_step);
       this->assemble_force(rhs, time, time_step);
 
       this->extrapolate(x, prev_x);
@@ -213,6 +294,20 @@ namespace dealii
         {
           AssertThrow(false, ExcMessage(e.what()));
         }
+    }
+
+
+    void
+    solve(BlockVectorType   &x,
+          BlockVectorType   &prev_x,
+          const unsigned int timestep_number,
+          const double       time,
+          const double       time_step) const
+    {
+      BlockVectorType rhs(x.n_blocks());
+      for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
+        rhs.block(j).reinit(x.block(j).get_partitioner());
+      this->solve(x, prev_x, rhs, timestep_number, time, time_step);
     }
   };
 
@@ -274,13 +369,13 @@ namespace dealii
     }
 
     void
-    solve(BlockVectorType                    &u,
-          BlockVectorType                    &v,
-          VectorType const                   &prev_u,
-          VectorType const                   &prev_v,
-          [[maybe_unused]] const unsigned int timestep_number,
-          const double                        time,
-          const double                        time_step) const
+    solve(BlockVectorType  &u,
+          BlockVectorType  &v,
+          VectorType const &prev_u,
+          VectorType const &prev_v,
+          const unsigned int,
+          const double time,
+          const double time_step) const
     {
       BlockVectorType rhs(u.n_blocks());
       for (unsigned int j = 0; j < rhs.n_blocks(); ++j)

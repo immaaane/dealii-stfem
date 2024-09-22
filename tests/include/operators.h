@@ -16,6 +16,55 @@
 #include "types.h"
 namespace dealii
 {
+  namespace internal
+  {
+    template <int dim, typename Number, typename T, typename F>
+    void
+    set_dirichlet_values(T &v, const Point<dim, Number> &p, F &&fill_value)
+    {
+      for (unsigned int i = 0; i < p[0].size(); ++i)
+        {
+          Point<dim> point;
+          for (unsigned int d = 0; d < dim; ++d)
+            point[d] = p[d][i];
+          fill_value(v, i, point);
+        }
+    }
+
+    template <int dim, typename Number>
+    void
+    set_dirichlet_vector(Tensor<1, dim, Number>                     &v,
+                         const Point<dim, Number>                   &p,
+                         Function<dim, typename Number::value_type> &g)
+    {
+      set_dirichlet_values(v,
+                           p,
+                           [&g](auto &v, unsigned int i, const auto &point) {
+                             for (unsigned int d = 0; d < dim; ++d)
+                               v[d][i] = g.value(point, d);
+                           });
+    }
+
+    template <int dim, typename Number>
+    void
+    set_dirichlet_scalar(Number                                     &v,
+                         const Point<dim, Number>                   &p,
+                         Function<dim, typename Number::value_type> &g)
+    {
+      set_dirichlet_values(v,
+                           p,
+                           [&g](auto &v, unsigned int i, const auto &point) {
+                             v[i] = g.value(point);
+                           });
+    }
+  } // namespace internal
+
+  template <int dim, int n_components, typename Number>
+  using DirichletValue =
+    typename std::conditional<n_components == dim,
+                              Tensor<1, dim, VectorizedArray<Number>>,
+                              VectorizedArray<Number>>::type;
+
   template <typename Number>
   void
   tensorproduct_add(BlockVectorT<Number>     &c,
@@ -83,7 +132,8 @@ namespace dealii
     return c;
   }
 
-  template <typename Number,
+  template <int dim,
+            typename Number,
             typename SystemMatrixTypeK,
             typename SystemMatrixTypeM = SystemMatrixTypeK>
   class SystemMatrixBase : public Subscriptor
@@ -96,12 +146,14 @@ namespace dealii
                      const SystemMatrixTypeK  &K,
                      const SystemMatrixTypeM  &M,
                      const FullMatrix<Number> &Alpha_,
-                     const FullMatrix<Number> &Beta_)
+                     const FullMatrix<Number> &Beta_,
+                     BlockSlice                blk_slice_ = {})
       : timer(timer)
       , K(K)
       , M(M)
       , Alpha(Alpha_)
       , Beta(Beta_)
+      , blk_slice(blk_slice_)
       , alpha_is_zero(Alpha.all_zero())
       , beta_is_zero(Beta.all_zero())
     {
@@ -118,7 +170,7 @@ namespace dealii
     virtual void
     vmult_slice_add(BlockVectorType &dst, BlockVectorType const &src) const = 0;
 
-    virtual void
+    void
     vmult_slice(BlockVectorType &dst, BlockVectorType const &src) const
     {
       dst = 0.0;
@@ -157,14 +209,16 @@ namespace dealii
     const FullMatrix<Number> &Alpha;
     const FullMatrix<Number> &Beta;
 
+    BlockSlice blk_slice;
     // Only used for nx1: small optimization to avoid unnecessary vmult
     bool alpha_is_zero;
     bool beta_is_zero;
   };
 
 
-  template <typename Number, typename SystemMatrixType>
-  class SystemMatrix final : public SystemMatrixBase<Number, SystemMatrixType>
+  template <int dim, typename Number, typename SystemMatrixType>
+  class SystemMatrix final
+    : public SystemMatrixBase<dim, Number, SystemMatrixType>
   {
   public:
     using BlockVectorType = BlockVectorT<Number>;
@@ -175,7 +229,11 @@ namespace dealii
                  const SystemMatrixType   &M,
                  const FullMatrix<Number> &Alpha_,
                  const FullMatrix<Number> &Beta_)
-      : SystemMatrixBase<Number, SystemMatrixType>(timer, K, M, Alpha_, Beta_)
+      : SystemMatrixBase<dim, Number, SystemMatrixType>(timer,
+                                                        K,
+                                                        M,
+                                                        Alpha_,
+                                                        Beta_)
     {}
 
     virtual void
@@ -308,9 +366,12 @@ namespace dealii
   };
 
 
-  template <typename Number, typename StokesMatrixType, typename MassMatrixType>
+  template <int dim,
+            typename Number,
+            typename StokesMatrixType,
+            typename MassMatrixType>
   class SystemMatrixStokes final
-    : public SystemMatrixBase<Number, StokesMatrixType, MassMatrixType>
+    : public SystemMatrixBase<dim, Number, StokesMatrixType, MassMatrixType>
   {
   public:
     using BlockVectorType = BlockVectorT<Number>;
@@ -322,12 +383,13 @@ namespace dealii
                        const FullMatrix<Number> &Alpha_,
                        const FullMatrix<Number> &Beta_,
                        const BlockSlice         &blk_slice_)
-      : SystemMatrixBase<Number, StokesMatrixType, MassMatrixType>(timer,
-                                                                   K,
-                                                                   M,
-                                                                   Alpha_,
-                                                                   Beta_)
-      , blk_slice(blk_slice_)
+      : SystemMatrixBase<dim, Number, StokesMatrixType, MassMatrixType>(
+          timer,
+          K,
+          M,
+          Alpha_,
+          Beta_,
+          blk_slice_)
     {}
 
 
@@ -335,6 +397,7 @@ namespace dealii
     vmult(BlockVectorType &dst, const BlockVectorType &src) const override
     {
       TimerOutput::Scope scope(this->timer, "vmult");
+      auto const        &blk_slice = this->blk_slice;
       AssertDimension(this->Alpha.m(), src.n_blocks());
       dst = 0.0;
       BlockVectorType tmp(2);
@@ -371,6 +434,7 @@ namespace dealii
     Tvmult(BlockVectorType &dst, const BlockVectorType &src) const override
     {
       TimerOutput::Scope scope(this->timer, "vmult");
+      auto const        &blk_slice = this->blk_slice;
       AssertDimension(this->Alpha.m(), src.n_blocks());
       dst = 0.0;
       BlockVectorType tmp(2);
@@ -409,12 +473,12 @@ namespace dealii
                     BlockVectorType const &src) const override
     {
       TimerOutput::Scope scope(this->timer, "vmult");
+      auto const        &blk_slice = this->blk_slice;
       AssertDimension(this->Alpha.n(), 1);
       AssertDimension(src.n_blocks(), blk_slice.n_variables());
 
       BlockVectorType tmp(2);
       this->K.initialize_dof_vector(tmp);
-      BlockVectorType tmp_src(tmp.n_blocks());
 
       for (unsigned int it = 0; it < blk_slice.n_timesteps_at_once(); ++it)
         for (unsigned int id = 0; id < blk_slice.n_timedofs(); ++id)
@@ -460,6 +524,7 @@ namespace dealii
     void
     initialize_dof_vector(BlockVectorT<Number2> &vec) const
     {
+      auto const &blk_slice = this->blk_slice;
       vec.reinit(this->Alpha.m());
       for (unsigned int i = 0; i < this->Alpha.m(); ++i)
         {
@@ -501,8 +566,6 @@ namespace dealii
     {
       scatter(dst, tmp, matrix, blk_slice, jt, v, jd, it, v, id);
     }
-
-    BlockSlice blk_slice;
   };
 
 
@@ -836,13 +899,22 @@ namespace dealii
       const std::vector<const DoFHandler<dim> *>           &dof_handlers,
       const std::vector<const AffineConstraints<Number> *> &constraints,
       const std::vector<Quadrature<dim>>                   &quadrature,
-      const double                                          viscosity_)
-      : viscosity(viscosity_)
+      const Number                                          viscosity_,
+      std::set<types::boundary_id> const &weak_boundary_ids_ = {},
+      const Number                        h_                 = 1.0,
+      const Number                        penalty1_          = 20,
+      const Number                        penalty2_          = 10)
+      : weak_boundary_ids(weak_boundary_ids_)
+      , viscosity(viscosity_)
+      , h(h_)
+      , gamma1(viscosity * penalty1_ / h)
+      , gamma2(penalty2_ / h)
     {
       typename MatrixFree<dim, Number>::AdditionalData additional_data;
-      // additional_data.mapping_update_flags =
-      //   update_values | update_gradients | update_quadrature_points;
       additional_data.mapping_update_flags = update_values | update_gradients;
+      additional_data.mapping_update_flags_boundary_faces =
+        update_values | update_gradients | update_normal_vectors |
+        update_quadrature_points;
       matrix_free.reinit(
         mapping, dof_handlers, constraints, quadrature, additional_data);
     }
@@ -875,11 +947,22 @@ namespace dealii
     void
     vmult(BlockVectorType &dst, const BlockVectorType &src) const
     {
-      matrix_free.cell_loop(&StokesMatrixFreeOperator::do_cell_integral_range,
-                            this,
-                            dst,
-                            src,
-                            true);
+      if (!weak_boundary_ids.empty())
+        matrix_free.loop(&StokesMatrixFreeOperator::do_cell_integral_range,
+                         &StokesMatrixFreeOperator::do_face_integral_range,
+                         &StokesMatrixFreeOperator::do_boundary_integral_range,
+                         this,
+                         dst,
+                         src,
+                         true,
+                         MatrixFree<dim, Number>::DataAccessOnFaces::none,
+                         MatrixFree<dim, Number>::DataAccessOnFaces::none);
+      else
+        matrix_free.cell_loop(&StokesMatrixFreeOperator::do_cell_integral_range,
+                              this,
+                              dst,
+                              src,
+                              true);
     }
 
     void
@@ -892,11 +975,21 @@ namespace dealii
         constraints = std::vector<const dealii::AffineConstraints<Number> *>{
           &matrix_free.get_affine_constraints(0),
           &matrix_free.get_affine_constraints(1)};
-      compute_matrix(matrix_free,
-                     constraints,
-                     sparse_matrix,
-                     &StokesMatrixFreeOperator::do_cell_integral_local,
-                     this);
+      if (!weak_boundary_ids.empty())
+        compute_matrix(
+          matrix_free,
+          constraints,
+          sparse_matrix,
+          &StokesMatrixFreeOperator::do_cell_integral_local,
+          &StokesMatrixFreeOperator::do_face_integral_local,
+          &StokesMatrixFreeOperator::do_boundary_face_integral_local,
+          this);
+      else
+        compute_matrix(matrix_free,
+                       constraints,
+                       sparse_matrix,
+                       &StokesMatrixFreeOperator::do_cell_integral_local,
+                       this);
     }
 
     types::global_dof_index
@@ -913,9 +1006,108 @@ namespace dealii
       return 0.0;
     }
 
+    Tensor<1, dim, Number>
+    compute_drag_lift(BlockVectorSliceT<Number> const &src,
+                      std::set<types::boundary_id>     obstacle_id,
+                      Number                           scale) const
+    {
+      auto const &mpi_comm = matrix_free.get_dof_handler().get_communicator();
+      auto const &v_v      = src[0].get();
+      auto const &p_v      = src[1].get();
+      FEFaceIntegratorU velocity(matrix_free, true, 0, 0);
+      FEFaceIntegratorP pressure(matrix_free, true, 1, 0);
+
+      Tensor<1, dim, Number> f;
+      for (unsigned int face = matrix_free.n_inner_face_batches();
+           face < (matrix_free.n_inner_face_batches() +
+                   matrix_free.n_boundary_face_batches());
+           ++face)
+        {
+          velocity.reinit(face);
+          pressure.reinit(face);
+          if (auto it = obstacle_id.find(velocity.boundary_id());
+              it != obstacle_id.end())
+            {
+              velocity.read_dof_values(v_v);
+              pressure.read_dof_values(p_v);
+              velocity.evaluate(dealii::EvaluationFlags::gradients);
+              pressure.evaluate(dealii::EvaluationFlags::values);
+              for (unsigned int q = 0; q < velocity.n_q_points; ++q)
+                {
+                  auto p      = pressure.get_value(q);
+                  auto n      = velocity.get_normal_vector(q);
+                  auto grad_v = velocity.get_gradient(q);
+                  auto tau =
+                    p * n - viscosity * (grad_v + transpose(grad_v)) * n;
+                  velocity.submit_value(tau, q);
+                }
+              auto f_local = velocity.integrate_value();
+              for (unsigned int d = 0; d < dim; ++d)
+                for (unsigned int n = 0;
+                     n < matrix_free.n_active_entries_per_face_batch(face);
+                     ++n)
+                  f[d] += scale * f_local[d][n];
+            }
+        }
+      f = dealii::Utilities::MPI::sum(f, mpi_comm);
+      return f;
+    }
+
+    double
+    compute_divergence(
+      VectorType const                       &src,
+      LinearAlgebra::ReadWriteVector<Number> &cell_vector) const
+    {
+      VectorType dummy;
+      std::function<void(const MatrixFree<dim, Number> &,
+                         VectorType &,
+                         const VectorType &,
+                         const std::pair<unsigned int, unsigned int> &)>
+        cell_op = [this, &cell_vector](
+                    const MatrixFree<dim, Number>               &matrix_free,
+                    VectorType                                  &dst,
+                    const VectorType                            &src,
+                    const std::pair<unsigned int, unsigned int> &range) {
+          this->divergence_cell_loop(matrix_free, dst, src, range, cell_vector);
+        };
+
+      matrix_free.cell_loop(cell_op, dummy, src, false);
+      auto divergence =
+        std::accumulate(cell_vector.begin(), cell_vector.end(), 0.);
+      auto const &mpi_comm = matrix_free.get_dof_handler().get_communicator();
+      divergence           = dealii::Utilities::MPI::sum(divergence, mpi_comm);
+      return std::sqrt(divergence);
+    }
+
+    void
+    divergence_cell_loop(
+      const MatrixFree<dim, Number> &matrix_free,
+      VectorType &,
+      const VectorType                            &src,
+      const std::pair<unsigned int, unsigned int> &range,
+      LinearAlgebra::ReadWriteVector<Number>      &cell_vector) const
+    {
+      FECellIntegratorU velocity(matrix_free, 0);
+      for (unsigned int cell = range.first; cell < range.second; ++cell)
+        {
+          Number divergence = 0;
+          velocity.reinit(cell);
+          velocity.read_dof_values_plain(src);
+          velocity.evaluate(dealii::EvaluationFlags::gradients);
+          for (unsigned int q = 0; q < velocity.n_q_points; q++)
+            {
+              auto div_u = velocity.get_divergence(q);
+              divergence += (div_u * div_u * velocity.JxW(q)).sum();
+            }
+          cell_vector[cell] = divergence;
+        }
+    }
+
   private:
     using FECellIntegratorP = FEEvaluation<dim, -1, 0, 1, Number>;
     using FECellIntegratorU = FEEvaluation<dim, -1, 0, dim, Number>;
+    using FEFaceIntegratorP = FEFaceEvaluation<dim, -1, 0, 1, Number>;
+    using FEFaceIntegratorU = FEFaceEvaluation<dim, -1, 0, dim, Number>;
 
     void
     do_cell_integral_range(
@@ -964,8 +1156,383 @@ namespace dealii
       pressure.integrate(EvaluationFlags::values);
     }
 
-    MatrixFree<dim, Number> matrix_free;
+    void
+    do_face_integral_range(const MatrixFree<dim, Number> &,
+                           BlockVectorType &,
+                           const BlockVectorType &,
+                           const std::pair<unsigned int, unsigned int> &) const
+    {}
 
-    Number viscosity = 1.0;
+    void
+    do_face_integral_local(
+      std::pair<FEFaceIntegratorU &, FEFaceIntegratorU &> const &,
+      std::pair<FEFaceIntegratorP &, FEFaceIntegratorP &> const &) const
+    {}
+
+    void
+    do_boundary_integral_range(
+      const MatrixFree<dim, Number>               &matrix_free,
+      BlockVectorType                             &dst,
+      const BlockVectorType                       &src,
+      const std::pair<unsigned int, unsigned int> &range) const
+    {
+      FEFaceIntegratorU velocity(matrix_free, true, 0, 0);
+      FEFaceIntegratorP pressure(matrix_free, true, 1, 0);
+      for (unsigned int face = range.first; face < range.second; ++face)
+        {
+          velocity.reinit(face);
+          velocity.read_dof_values(src.block(0));
+          pressure.reinit(face);
+          pressure.read_dof_values(src.block(1));
+
+          do_boundary_face_integral_local(velocity, pressure);
+
+          velocity.distribute_local_to_global(dst.block(0));
+          pressure.distribute_local_to_global(dst.block(1));
+        }
+    }
+
+    void
+    do_boundary_face_integral_local(FEFaceIntegratorU &velocity,
+                                    FEFaceIntegratorP &pressure) const
+    {
+      if (auto id = weak_boundary_ids.find(velocity.boundary_id());
+          id == weak_boundary_ids.end())
+        {
+          std::fill_n(velocity.begin_values(),
+                      velocity.n_q_points * velocity.n_components,
+                      Number(0.0));
+          std::fill_n(velocity.begin_gradients(),
+                      velocity.n_q_points * dim * velocity.n_components,
+                      Number(0.0));
+          std::fill_n(pressure.begin_values(),
+                      pressure.n_q_points * pressure.n_components,
+                      Number(0.0));
+          std::fill_n(pressure.begin_gradients(),
+                      pressure.n_q_points * dim * pressure.n_components,
+                      Number(0.0));
+        }
+      else
+        {
+          velocity.evaluate(EvaluationFlags::values |
+                            EvaluationFlags::gradients);
+          pressure.evaluate(EvaluationFlags::values);
+          for (unsigned int q = 0; q < velocity.n_q_points; ++q)
+            {
+              auto normal = velocity.normal_vector(q);
+              auto grad_u = velocity.get_gradient(q);
+              auto u      = velocity.get_value(q);
+              auto p      = pressure.get_value(q);
+
+              auto nitsche_u_1 = -viscosity * grad_u * normal + p * normal +
+                                 gamma1 * u + gamma2 * normal * (u * normal);
+              velocity.submit_value(nitsche_u_1, q);
+              velocity.submit_normal_derivative(-viscosity * u, q);
+              pressure.submit_value(-u * normal, q);
+            }
+        }
+      velocity.integrate(EvaluationFlags::values | EvaluationFlags::gradients);
+      pressure.integrate(EvaluationFlags::values);
+    }
+
+    MatrixFree<dim, Number>      matrix_free;
+    std::set<types::boundary_id> weak_boundary_ids{};
+    Number                       viscosity = 1.0;
+    Number                       h         = 1.0;
+    Number                       gamma1 = 20, gamma2 = 10;
   };
+
+  template <int dim, typename Number>
+  class StokesNitscheMatrixFreeOperator
+  {
+  public:
+    using BlockVectorType = BlockVectorT<Number>;
+    using VectorType      = VectorT<Number>;
+
+    StokesNitscheMatrixFreeOperator(
+      const Mapping<dim>                                   &mapping,
+      const std::vector<const DoFHandler<dim> *>           &dof_handlers,
+      const std::vector<const AffineConstraints<Number> *> &constraints,
+      const std::vector<Quadrature<dim>>                   &quadrature,
+      const Number                                          viscosity_,
+      const Number                                          h_,
+      const Number                                          penalty1_,
+      const Number                                          penalty2_)
+      : viscosity(viscosity_)
+      , h(h_)
+      , gamma1(viscosity * penalty1_ / h)
+      , gamma2(penalty2_ / h)
+    {
+      typename MatrixFree<dim, Number>::AdditionalData additional_data;
+      additional_data.mapping_update_flags             = update_default;
+      additional_data.mapping_update_flags_inner_faces = update_default;
+      additional_data.mapping_update_flags_boundary_faces =
+        update_values | update_gradients | update_normal_vectors |
+        update_quadrature_points;
+      matrix_free.reinit(
+        mapping, dof_handlers, constraints, quadrature, additional_data);
+    }
+
+    void
+    set_dirichlet_functions(
+      const std::map<types::boundary_id, dealii::Function<dim, Number> *>
+        &dirichlet_color_to_fun) const
+    {
+      this->dirichlet_color_to_fun = &dirichlet_color_to_fun;
+    }
+
+    template <typename Number2>
+    void
+    initialize_dof_vector(BlockVectorT<Number2> &vec) const
+    {
+      vec.reinit(2);
+      initialize_dof_vector(vec.block(0), 0);
+      initialize_dof_vector(vec.block(1), 1);
+    }
+
+    template <typename Number2>
+    void
+    initialize_dof_vector(
+      const std::vector<std::reference_wrapper<VectorT<Number2>>> &vec) const
+    {
+      initialize_dof_vector(vec[0].get(), 0);
+      initialize_dof_vector(vec[1].get(), 1);
+    }
+
+    template <typename Number2>
+    void
+    initialize_dof_vector(VectorT<Number2> &vec, unsigned int variable) const
+    {
+      matrix_free.initialize_dof_vector(vec, variable);
+    }
+
+    void
+    vmult(BlockVectorType &dst) const
+    {
+      BlockVectorType dummy;
+      if (dirichlet_color_to_fun)
+        matrix_free.loop(
+          &StokesNitscheMatrixFreeOperator::do_cell_integral_range,
+          &StokesNitscheMatrixFreeOperator::do_face_integral_range,
+          &StokesNitscheMatrixFreeOperator::do_boundary_integral_range,
+          this,
+          dst,
+          dummy,
+          true,
+          MatrixFree<dim, Number>::DataAccessOnFaces::none,
+          MatrixFree<dim, Number>::DataAccessOnFaces::none);
+    }
+
+    types::global_dof_index
+    m() const
+    {
+      return matrix_free.get_dof_handler(0).n_dofs() +
+             matrix_free.get_dof_handler(1).n_dofs();
+    }
+
+    Number
+    el(unsigned int, unsigned int) const
+    {
+      Assert(false, ExcNotImplemented());
+      return 0.0;
+    }
+
+  private:
+    using FECellIntegratorP = FEEvaluation<dim, -1, 0, 1, Number>;
+    using FECellIntegratorU = FEEvaluation<dim, -1, 0, dim, Number>;
+    using FEFaceIntegratorP = FEFaceEvaluation<dim, -1, 0, 1, Number>;
+    using FEFaceIntegratorU = FEFaceEvaluation<dim, -1, 0, dim, Number>;
+
+    void
+    do_cell_integral_range(const MatrixFree<dim, Number> &,
+                           BlockVectorType &,
+                           const BlockVectorType &,
+                           const std::pair<unsigned int, unsigned int> &) const
+    {}
+
+
+    void
+    do_cell_integral_local(FECellIntegratorU &, FECellIntegratorP &) const
+    {}
+
+    void
+    do_face_integral_range(const MatrixFree<dim, Number> &,
+                           BlockVectorType &,
+                           const BlockVectorType &,
+                           const std::pair<unsigned int, unsigned int> &) const
+    {}
+
+    void
+    do_face_integral_local(
+      std::pair<FEFaceIntegratorU &, FEFaceIntegratorU &> const &,
+      std::pair<FEFaceIntegratorP &, FEFaceIntegratorP &> const &) const
+    {}
+
+    void
+    do_boundary_integral_range(
+      const MatrixFree<dim, Number> &matrix_free,
+      BlockVectorType               &dst,
+      const BlockVectorType &,
+      const std::pair<unsigned int, unsigned int> &range) const
+    {
+      FEFaceIntegratorU velocity(matrix_free, true, 0, 0);
+      FEFaceIntegratorP pressure(matrix_free, true, 1, 0);
+      for (unsigned int face = range.first; face < range.second; ++face)
+        {
+          velocity.reinit(face);
+          std::vector<DirichletValue<dim, dim, Number>> dv;
+          if (auto g = dirichlet_color_to_fun->find(velocity.boundary_id());
+              g != dirichlet_color_to_fun->end())
+            {
+              dv.resize(velocity.n_q_points);
+              for (unsigned int q = 0; q < velocity.n_q_points; ++q)
+                internal::set_dirichlet_vector(dv[q],
+                                               velocity.quadrature_point(q),
+                                               *(g->second));
+            }
+          else
+            continue;
+
+          pressure.reinit(face);
+          for (unsigned int q = 0; q < velocity.n_q_points; ++q)
+            {
+              auto        normal = velocity.normal_vector(q);
+              auto const &g      = dv[q];
+              auto nitsche_u_1   = gamma1 * g + gamma2 * normal * (g * normal);
+              velocity.submit_value(nitsche_u_1, q);
+              velocity.submit_normal_derivative(-viscosity * g, q);
+              pressure.submit_value(-g * normal, q);
+            }
+          velocity.integrate(EvaluationFlags::values |
+                             EvaluationFlags::gradients);
+          pressure.integrate(EvaluationFlags::values);
+          velocity.distribute_local_to_global(dst.block(0));
+          pressure.distribute_local_to_global(dst.block(1));
+        }
+    }
+
+    mutable std::map<types::boundary_id, dealii::Function<dim, Number> *> const
+      *dirichlet_color_to_fun = nullptr;
+
+    MatrixFree<dim, Number> matrix_free;
+    Number                  viscosity = 1.0;
+    Number                  h         = 1.0;
+    Number                  gamma1 = 20, gamma2 = 10;
+  };
+
+
+  void
+  boundary_values_map_to_constraints(
+    AffineConstraints<Number>                       &constraints,
+    const std::map<types::global_dof_index, double> &boundary_values,
+    double                                           scale = 1.0)
+  {
+    for (auto const &[dof, boundary_value] : boundary_values)
+      if (constraints.can_store_line(dof) && !constraints.is_constrained(dof))
+        {
+          constraints.add_line(dof);
+          if (boundary_value != 0 && scale != 0)
+            constraints.set_inhomogeneity(dof, scale * boundary_value);
+        }
+  }
+
+  void
+  set_inhomogeneity(
+    VectorT<Number>                                 &v,
+    const std::map<types::global_dof_index, Number> &boundary_values)
+  {
+    for (auto [id, val] : boundary_values)
+      if (v.get_partitioner()->in_local_range(id))
+        v[id] = val;
+
+    v.update_ghost_values();
+  }
+  void
+  set_inhomogeneity_zero(
+    VectorT<Number>                                 &v,
+    const std::map<types::global_dof_index, Number> &boundary_values)
+  {
+    for (auto [id, val] : boundary_values)
+      if (v.get_partitioner()->in_local_range(id))
+        v[id] = Number(0);
+
+    v.update_ghost_values();
+  }
+
+  void
+  set_inhomogeneity(BlockVectorT<Number> &v,
+                    const std::vector<std::map<types::global_dof_index, Number>>
+                      &boundary_values)
+  {
+    AssertDimension(v.n_blocks(), boundary_values.size());
+    for (unsigned int i = 0; i < v.n_blocks(); ++i)
+      set_inhomogeneity(v.block(i), boundary_values[i]);
+  }
+
+  void
+  set_inhomogeneity_zero(
+    BlockVectorT<Number> &v,
+    const std::vector<std::map<types::global_dof_index, Number>>
+      &boundary_values)
+  {
+    AssertDimension(v.n_blocks(), boundary_values.size());
+    for (unsigned int i = 0; i < v.n_blocks(); ++i)
+      set_inhomogeneity_zero(v.block(i), boundary_values[i]);
+  }
+
+  template <int dim, typename Number>
+  std::map<types::global_dof_index, Number>
+  get_inhomogeneous_boundary(
+    const Mapping<dim>    &mapping,
+    const DoFHandler<dim> &dof,
+    std::map<types::boundary_id, const dealii::Function<dim, Number> *> const
+                        &dirichlet_color_to_fun,
+    const ComponentMask &mask = {})
+  {
+    std::map<types::global_dof_index, Number> boundary_values;
+    dealii::VectorTools::interpolate_boundary_values(
+      mapping, dof, dirichlet_color_to_fun, boundary_values, mask);
+
+    return boundary_values;
+  }
+
+  template <int dim, typename Number>
+  void
+  get_inhomogeneous_boundary(
+    std::vector<std::map<types::global_dof_index, Number>> &boundary_values,
+    double                                                  t,
+    double                                                  dt,
+    TimeStepType                                            type,
+    unsigned int                                            var,
+    const BlockSlice                                       &blk_slice,
+    std::map<types::boundary_id, dealii::Function<dim, Number> *> const
+                          &dirichlet_color_to_fun,
+    const Mapping<dim>    &mapping,
+    const DoFHandler<dim> &dof,
+    const ComponentMask   &mask = {})
+  {
+    AssertDimension(boundary_values.size(), blk_slice.n_blocks());
+    auto shift = type == TimeStepType::DG ? 0 : 1;
+    auto qt    = get_time_quad(type,
+                            blk_slice.n_timedofs() -
+                              (type == TimeStepType::DG ? 1 : 0));
+    std::map<types::boundary_id, const dealii::Function<dim, Number> *>
+      dirichlet_color_to_fun_;
+    for (const auto &pair : dirichlet_color_to_fun)
+      dirichlet_color_to_fun_.insert(
+        {pair.first, static_cast<const Function<dim, Number> *>(pair.second)});
+
+    for (unsigned int it = 0; it < blk_slice.n_timesteps_at_once(); ++it)
+      for (unsigned int id = 0; id < blk_slice.n_timedofs(); ++id)
+        {
+          double time = t + dt * it + dt * qt.point(shift + id)[0];
+          for (auto [b_id, g] : dirichlet_color_to_fun)
+            g->set_time(time);
+          boundary_values[blk_slice.index(it, var, id)] =
+            get_inhomogeneous_boundary(mapping,
+                                       dof,
+                                       dirichlet_color_to_fun_,
+                                       mask);
+        }
+  }
 } // namespace dealii

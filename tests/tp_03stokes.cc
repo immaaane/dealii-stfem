@@ -9,7 +9,6 @@
 
 #include <deal.II/fe/fe_dgp.h>
 
-#include <deal.II/grid/grid_generator.h>
 #include <deal.II/grid/grid_tools.h>
 
 #include <deal.II/lac/precondition.h>
@@ -21,6 +20,7 @@
 #include "include/fe_time.h"
 #include "include/getopt++.h"
 #include "include/gmg.h"
+#include "include/grids.h"
 #include "include/operators.h"
 #include "include/time_integrators.h"
 
@@ -48,6 +48,9 @@ test(dealii::ConditionalOStream &pcout,
   auto convergence_test = [&]<int dim>(int const              refinement,
                                        int const              fe_degree,
                                        Parameters<dim> const &parameters) {
+    stokes::Parameters stokes_parameters;
+    if (parameters.additional_file != "")
+      stokes_parameters.parse(parameters.additional_file);
     const bool print_timing      = parameters.print_timing;
     const bool space_time_mg     = parameters.space_time_mg;
     const bool time_before_space = parameters.time_before_space;
@@ -56,8 +59,14 @@ test(dealii::ConditionalOStream &pcout,
            ExcLowerRange(parameters.fe_degree, (is_cgp ? 1 : 0)));
     Assert(parameters.refinement >= 1, ExcLowerRange(parameters.refinement, 1));
 
-    MappingQ1<dim>     mapping;
-    bool const         do_output           = parameters.do_output;
+    MappingQ<dim> mapping(parameters.grid_descriptor != "hyperRectangle" ?
+                            1 :
+                            parameters.fe_degree + 1);
+    bool const    do_output      = parameters.do_output;
+    bool const    st_convergence = parameters.space_time_conv_test;
+    Assert(!st_convergence || !parameters.colorize_boundary,
+           ExcInternalError());
+
     unsigned int const n_timesteps_at_once = parameters.n_timesteps_at_once;
 
     using VectorType            = VectorT<Number>;
@@ -68,9 +77,14 @@ test(dealii::ConditionalOStream &pcout,
 
     auto const    basis = get_time_basis(parameters.type, fe_degree);
     FESystem<dim> fe_u(FE_Q<dim>(fe_degree + 1), dim);
-    FE_Q<dim>     fe_p(fe_degree);
-    QGauss<dim>   quad_u(fe_u.tensor_degree() + 1);
-    QGauss<dim>   quad_p(fe_p.tensor_degree() + 1);
+    std::unique_ptr<FiniteElement<dim>> fe_p;
+    if (stokes_parameters.dg_pressure)
+      fe_p = std::make_unique<FE_DGP<dim>>(fe_degree);
+    else
+      fe_p = std::make_unique<FE_Q<dim>>(fe_degree);
+
+    QGauss<dim>                  quad_u(fe_u.tensor_degree() + 1);
+    QGauss<dim>                  quad_p(fe_p->tensor_degree() + 1);
     std::vector<Quadrature<dim>> quads{quad_u, quad_p};
     std::vector<Quadrature<dim>> quads_u{quad_u, quad_u};
 
@@ -80,18 +94,28 @@ test(dealii::ConditionalOStream &pcout,
     std::vector<const DoFHandler<dim> *>      dof_handlers(
       {&dof_handler_u, &dof_handler_p});
 
-    GridGenerator::subdivided_hyper_rectangle(tria,
-                                              parameters.subdivisions,
-                                              parameters.hyperrect_lower_left,
-                                              parameters.hyperrect_upper_right);
-    double spc_step  = GridTools::minimal_cell_diameter(tria) / std::sqrt(dim);
-    double viscosity = parameters.viscosity;
+    setup_triangulation(tria, parameters);
+    double spc_step = GridTools::minimal_cell_diameter(tria) / std::sqrt(dim);
+
+    double       time     = 0.;
+    double       time_len = parameters.end_time - time;
+    unsigned int n_steps  = static_cast<unsigned int>((time_len) / spc_step);
+    double time_step_size = time_len * pow(2.0, -(refinement + 1)) / n_steps;
+
+    double viscosity = stokes_parameters.viscosity;
     tria.refine_global(refinement);
+    spc_step = GridTools::minimal_cell_diameter(tria) / std::sqrt(dim);
     if (parameters.distort_grid != 0.0)
       GridTools::distort_random(parameters.distort_grid, tria);
     dof_handler_u.distribute_dofs(fe_u);
-    dof_handler_p.distribute_dofs(fe_p);
+    dof_handler_p.distribute_dofs(*fe_p);
 
+    std::set<types::boundary_id> weak_boundary_ids{};
+    auto [d, d_map] =
+      get_dirichlet_function<Number>(parameters, stokes_parameters);
+    if (parameters.nitsche_boundary)
+      for (auto const &[id, g] : d_map)
+        weak_boundary_ids.insert(id);
 
     dealii::AffineConstraints<Number>                      constraints_u;
     dealii::AffineConstraints<Number>                      constraints_p;
@@ -108,9 +132,28 @@ test(dealii::ConditionalOStream &pcout,
                          locally_relevant_dofs_u);
     constraints_p.reinit(dof_handler_p.locally_owned_dofs(),
                          locally_relevant_dofs_p);
-    DoFTools::make_hanging_node_constraints(dof_handler_u, constraints_u);
-    DoFTools::make_zero_boundary_constraints(dof_handler_u, constraints_u);
-    DoFTools::make_hanging_node_constraints(dof_handler_p, constraints_p);
+    setup_constraints_up(constraints_u,
+                         constraints_p,
+                         dof_handler_u,
+                         dof_handler_p,
+                         parameters,
+                         stokes_parameters);
+    std::vector<std::map<types::global_dof_index, Number>> boundary_values(
+      blk_slice.n_blocks());
+    if (!parameters.nitsche_boundary)
+      {
+        get_inhomogeneous_boundary(boundary_values,
+                                   time + 0.2, // to avoid the start-up phase
+                                   time_step_size,
+                                   parameters.type,
+                                   0,
+                                   blk_slice,
+                                   d_map,
+                                   mapping,
+                                   dof_handler_u);
+        boundary_values_map_to_constraints(constraints_u,
+                                           boundary_values.back());
+      }
     constraints_u.close();
     constraints_p.close();
     pcout << "\n:: Number of active cells: " << tria.n_global_active_cells()
@@ -121,14 +164,27 @@ test(dealii::ConditionalOStream &pcout,
           << "\n:: Number of p degrees of freedom per cell: "
           << dof_handler_p.get_fe().n_dofs_per_cell() << "\n";
 
-    double       time     = 0.;
-    double       time_len = parameters.end_time - time;
-    unsigned int n_steps  = static_cast<unsigned int>((time_len) / spc_step);
-    double       time_step_size = time_len * pow(2.0, -refinement) / n_steps;
-
     // matrix-free operators
-    StokesMatrixFreeOperator<dim, Number> Stokes_mf(
-      mapping, dof_handlers, constraints, quads, viscosity);
+    StokesMatrixFreeOperator<dim, Number> Stokes_mf(mapping,
+                                                    dof_handlers,
+                                                    constraints,
+                                                    quads_u,
+                                                    viscosity,
+                                                    weak_boundary_ids,
+                                                    spc_step,
+                                                    stokes_parameters.penalty1,
+                                                    stokes_parameters.penalty2);
+    using Nitsche = StokesNitscheMatrixFreeOperator<dim, Number>;
+    std::unique_ptr<Nitsche> Stokes_nitsche_mf;
+    if (parameters.nitsche_boundary)
+      Stokes_nitsche_mf = std::make_unique<Nitsche>(mapping,
+                                                    dof_handlers,
+                                                    constraints,
+                                                    quads_u,
+                                                    viscosity,
+                                                    spc_step,
+                                                    stokes_parameters.penalty1,
+                                                    stokes_parameters.penalty2);
     MatrixFreeOperatorVector<dim, Number> M_mf(
       mapping, dof_handler_u, constraints_u, quad_u, 1.0, 0.0);
 
@@ -147,11 +203,13 @@ test(dealii::ConditionalOStream &pcout,
                       TimerOutput::never,
                       TimerOutput::cpu_and_wall_times);
 
-    using SystemN = SystemMatrixStokes<Number,
+    using SystemN = SystemMatrixStokes<dim,
+                                       Number,
                                        StokesMatrixFreeOperator<dim, Number>,
                                        MatrixFreeOperatorVector<dim, Number>>;
     using SystemNP =
-      SystemMatrixStokes<NumberPreconditioner,
+      SystemMatrixStokes<dim,
+                         NumberPreconditioner,
                          StokesMatrixFreeOperator<dim, NumberPreconditioner>,
                          MatrixFreeOperatorVector<dim, NumberPreconditioner>>;
     std::unique_ptr<SystemN> rhs_matrix, matrix;
@@ -167,12 +225,12 @@ test(dealii::ConditionalOStream &pcout,
     rhs_matrix = std::make_unique<SystemN>(
       timer, Stokes_mf, M_mf, rhs_uK, rhs_uM, blk_slice);
 
-
     /// GMG
     RepartitioningPolicyTools::DefaultPolicy<dim>          policy(true);
     std::vector<std::shared_ptr<const Triangulation<dim>>> mg_triangulations =
       MGTransferGlobalCoarseningTools::create_geometric_coarsening_sequence(
-        tria, policy);
+        tria // , policy
+      );
     unsigned int fe_degree_min =
       space_time_mg ? parameters.fe_degree_min : fe_degree;
     unsigned int n_timesteps_min =
@@ -260,7 +318,7 @@ test(dealii::ConditionalOStream &pcout,
         auto constraints_u_ =
           std::make_shared<AffineConstraints<NumberPreconditioner>>();
 
-        dof_handler_p_->distribute_dofs(fe_p);
+        dof_handler_p_->distribute_dofs(*fe_p);
         dof_handler_u_->distribute_dofs(fe_u);
         IndexSet locally_relevant_dofs_u_;
         IndexSet locally_relevant_dofs_p_;
@@ -272,14 +330,18 @@ test(dealii::ConditionalOStream &pcout,
                                locally_relevant_dofs_u_);
         constraints_p_->reinit(dof_handler_p_->locally_owned_dofs(),
                                locally_relevant_dofs_p_);
-        DoFTools::make_hanging_node_constraints(*dof_handler_u_,
-                                                *constraints_u_);
 #ifndef CHECK_COMPUTE_SYSTEM_MATRIX
-        DoFTools::make_zero_boundary_constraints(*dof_handler_u_,
-                                                 *constraints_u_);
+        setup_constraints_up(*constraints_u_,
+                             *constraints_p_,
+                             *dof_handler_u_,
+                             *dof_handler_p_,
+                             parameters,
+                             stokes_parameters);
+        if (!parameters.nitsche_boundary)
+          DoFTools::make_zero_boundary_constraints(*dof_handler_u_,
+                                                   0,
+                                                   *constraints_u_);
 #endif
-        DoFTools::make_hanging_node_constraints(*dof_handler_p_,
-                                                *constraints_p_);
         constraints_u_->close();
         constraints_p_->close();
 
@@ -290,10 +352,17 @@ test(dealii::ConditionalOStream &pcout,
         mg_constraints_u[l]  = constraints_u_;
         mg_constraints_p[l]  = constraints_p_;
         mg_constraints[l]    = {constraints_u_.get(), constraints_p_.get()};
-
+        spc_step = GridTools::minimal_cell_diameter(*mg_triangulations[l]) /
+                   std::sqrt(dim);
         auto Stokes_mf_ =
           std::make_shared<StokesMatrixFreeOperator<dim, NumberPreconditioner>>(
-            mapping, mg_dof_handlers[l], mg_constraints[l], quads_u, viscosity);
+            mapping,
+            mg_dof_handlers[l],
+            mg_constraints[l],
+            quads_u,
+            viscosity,
+            weak_boundary_ids,
+            spc_step);
         auto M_mf_ =
           std::make_shared<MatrixFreeOperatorVector<dim, NumberPreconditioner>>(
             mapping,
@@ -449,7 +518,7 @@ test(dealii::ConditionalOStream &pcout,
 
     std::unique_ptr<Function<dim, Number>> rhs_function_u, rhs_function_p;
     std::unique_ptr<Function<dim, Number>> exact_solution_u, exact_solution_p;
-    if (parameters.space_time_conv_test)
+    if (st_convergence)
       {
         exact_solution_u =
           std::make_unique<stokes::ExactSolutionU<dim, Number>>();
@@ -463,8 +532,9 @@ test(dealii::ConditionalOStream &pcout,
     else
       {
         exact_solution_u =
-          std::make_unique<Functions::CutOffFunctionCinfty<dim>>(
-            1.e-2, parameters.source, 1, numbers::invalid_unsigned_int, true);
+          std::make_unique<Functions::ZeroFunction<dim, Number>>(dim);
+        exact_solution_p =
+          std::make_unique<Functions::ZeroFunction<dim, Number>>(1);
         rhs_function_u =
           std::make_unique<Functions::ZeroFunction<dim, Number>>(dim);
         rhs_function_p =
@@ -474,43 +544,40 @@ test(dealii::ConditionalOStream &pcout,
                                      &dof_handlers,
                                      &quads,
                                      &rhs_function_u,
-                                     &rhs_function_p,
                                      &constraints,
                                      &parameters](const double time,
                                                   VectorType  &rhs) -> void {
       rhs_function_u->set_time(time);
       rhs = 0.0;
-      if (parameters.space_time_conv_test)
-        VectorTools::create_right_hand_side(mapping,
-                                            *dof_handlers[0],
-                                            quads[0],
-                                            *rhs_function_u,
-                                            rhs,
-                                            *constraints[0]);
+      if (is_zero_function(rhs_function_u.get()))
+        return;
+      VectorTools::create_right_hand_side(mapping,
+                                          *dof_handlers[0],
+                                          quads[0],
+                                          *rhs_function_u,
+                                          rhs,
+                                          *constraints[0]);
     };
     auto integrate_rhs_function_p = [&mapping,
                                      &dof_handlers,
                                      &quads,
-                                     &rhs_function_u,
                                      &rhs_function_p,
                                      &constraints,
                                      &parameters](const double time,
                                                   VectorType  &rhs) -> void {
       rhs_function_p->set_time(time);
       rhs = 0.0;
-      if (parameters.space_time_conv_test)
-        VectorTools::create_right_hand_side(mapping,
-                                            *dof_handlers[1],
-                                            quads[1],
-                                            *rhs_function_p,
-                                            rhs,
-                                            *constraints[1]);
+      if (is_zero_function(rhs_function_p.get()))
+        return;
+      VectorTools::create_right_hand_side(mapping,
+                                          *dof_handlers[1],
+                                          quads[0],
+                                          *rhs_function_p,
+                                          rhs,
+                                          *constraints[1]);
     };
-    auto evaluate_exact_solution_u = [&mapping,
-                                      &dof_handlers,
-                                      &exact_solution_u,
-                                      &exact_solution_p,
-                                      &parameters](const double time,
+    auto evaluate_exact_solution_u =
+      [&mapping, &dof_handlers, &exact_solution_u](const double time,
                                                    VectorType  &tmp) -> void {
       exact_solution_u->set_time(time);
       VectorTools::interpolate(mapping,
@@ -518,17 +585,26 @@ test(dealii::ConditionalOStream &pcout,
                                *exact_solution_u,
                                tmp);
     };
-    auto evaluate_exact_solution_p = [&mapping,
-                                      &dof_handlers,
-                                      &exact_solution_u,
-                                      &exact_solution_p,
-                                      &parameters](const double time,
-                                                   VectorType  &tmp) -> void {
+    auto evaluate_exact_solution_p =
+      [&mapping,
+       &dof_handlers,
+       &constraints_p,
+       &quad_p,
+       &exact_solution_p,
+       &stokes_parameters](const double time, VectorType &tmp) -> void {
       exact_solution_p->set_time(time);
-      VectorTools::interpolate(mapping,
-                               *dof_handlers[1],
-                               *exact_solution_p,
-                               tmp);
+      if (stokes_parameters.dg_pressure)
+        VectorTools::project(mapping,
+                             *dof_handlers[1],
+                             constraints_p,
+                             quad_p,
+                             *exact_solution_p,
+                             tmp);
+      else
+        VectorTools::interpolate(mapping,
+                                 *dof_handlers[1],
+                                 *exact_solution_p,
+                                 tmp);
     };
     auto evaluate_numerical_solution =
       [&constraints, &basis, &is_cgp, &blk_slice](int          variable,
@@ -571,18 +647,22 @@ test(dealii::ConditionalOStream &pcout,
       evaluate_numerical_solution(1, time, tmp, x, prev_x, blk_offset);
     };
 
-    BlockVectorType x, v;
+    BlockVectorType                        x, rhs, residual;
+    LinearAlgebra::ReadWriteVector<Number> cell_vector(tria.n_active_cells());
     matrix->initialize_dof_vector(x);
+    matrix->initialize_dof_vector(rhs);
+    matrix->initialize_dof_vector(residual);
+    std::set<types::boundary_id> obstacle_id{2};
+
     BlockVectorType prev_x(2);
     matrix->initialize_dof_vector(prev_x.block(0), 0);
     matrix->initialize_dof_vector(prev_x.block(1), 1);
 
     // Point eval
-    auto real_points = dim == 2 ?
-                         std::vector<Point<dim, Number>>{{0.75, 0}} :
-                         std::vector<Point<dim, Number>>{{0.75, 0, 0},
-                                                         {0, 0, 0.75},
-                                                         {0.75, 0.1, 0.75}};
+    auto real_points =
+      dim == 2 ?
+        std::vector<Point<dim, Number>>{{0.15, 0.2}, {0.25, 0.2}} :
+        std::vector<Point<dim, Number>>{{0.15, 0.2, 0.2}, {0.25, 0.2, 0.2}};
 
     Utilities::MPI::RemotePointEvaluation<dim, dim> rpe;
     rpe.reinit(real_points, tria, mapping);
@@ -590,7 +670,7 @@ test(dealii::ConditionalOStream &pcout,
     auto const   evaluate_function = [&](const ArrayView<Number> &values,
                                        const auto              &cell_data) {
       unsigned int              ii = i_eval_f;
-      FEPointEvaluation<1, dim> fe_point(mapping, fe_p, update_values);
+      FEPointEvaluation<1, dim> fe_point(mapping, *fe_p, update_values);
       std::vector<Number>       local_values;
       for (const auto cell : cell_data.cell_indices())
         {
@@ -634,7 +714,7 @@ test(dealii::ConditionalOStream &pcout,
     ErrorCalculator<dim, Number> error_calculator_p(
       parameters.type,
       fe_degree,
-      fe_p.tensor_degree(),
+      fe_p->tensor_degree(),
       mapping,
       dof_handler_p,
       *exact_solution_p,
@@ -643,23 +723,27 @@ test(dealii::ConditionalOStream &pcout,
     std::vector<std::function<void(const double, VectorType &)>>
       integrate_rhs_function_{integrate_rhs_function_u,
                               integrate_rhs_function_p};
-    std::unique_ptr<TimeIntegratorFO<dim, Number, Preconditioner, SystemN>>
+    std::unique_ptr<
+      TimeIntegratorFO<dim, Number, Preconditioner, SystemN, Nitsche>>
       step = std::make_unique<
-        TimeIntegratorFO<dim, Number, Preconditioner, SystemN>>(
+        TimeIntegratorFO<dim, Number, Preconditioner, SystemN, Nitsche>>(
         parameters.type,
         fe_degree,
         Alpha_1,
         Gamma_1,
-        1.e-12,
+        parameters.rel_tol,
         *matrix,
         *preconditioner,
         *rhs_matrix,
         integrate_rhs_function_,
         n_timesteps_at_once,
-        parameters.extrapolate);
+        parameters.extrapolate,
+        *Stokes_nitsche_mf);
+    if (parameters.nitsche_boundary)
+      for (auto [b_id, g] : d_map)
+        step->add_dirichlet_function(0, b_id, g);
 
     // interpolate initial value
-
     evaluate_exact_solution_u(
       0, x.block(blk_slice.index(n_timesteps_at_once - 1, 0, nt_dofs - 1)));
     evaluate_exact_solution_p(
@@ -667,8 +751,7 @@ test(dealii::ConditionalOStream &pcout,
 
     double           l2 = 0., l8 = -1., h1_semi = 0., hdiv_semi = 0.;
     double           l2_p = 0., l8_p = -1., h1_semi_p = 0.;
-    constexpr double qNaN           = std::numeric_limits<double>::quiet_NaN();
-    bool const       st_convergence = parameters.space_time_conv_test;
+    constexpr double qNaN = std::numeric_limits<double>::quiet_NaN();
     int              i = 0, total_gmres_iterations = 0;
 
     unsigned int samples_per_interval = (fe_degree + 1) * (fe_degree + 1);
@@ -692,20 +775,37 @@ test(dealii::ConditionalOStream &pcout,
 
     std::vector<Number> prev_output_pt_eval = output_point_evaluation;
     FullMatrix<Number>  output_pt_eval(fe_degree + 1, real_points.size());
+    std::vector<Number> prev_output_functional_eval(0.0, dim + 1);
+    FullMatrix<Number>  output_functional_eval(fe_degree + 1, dim + 1);
     FullMatrix<Number>  time_evaluator =
       get_time_evaluation_matrix<Number>(basis, samples_per_interval);
     FullMatrix<Number> output_pt_eval_res(samples_per_interval,
                                           real_points.size());
-    auto const         do_point_evaluation = [&]() {
+    FullMatrix<Number> output_functional_eval_res(samples_per_interval,
+                                                  dim + 1);
+    auto const         drag_lift_constant =
+      2.0 /
+      (stokes_parameters.characteristic_diameter * stokes_parameters.u_mean *
+       stokes_parameters.u_mean * stokes_parameters.height);
+
+    auto const do_point_evaluation = [&]() {
       Assert(output_pt_eval.n() >= prev_output_pt_eval.size(),
              ExcLowerRange(output_pt_eval.n(), prev_output_pt_eval.size()));
-      for (unsigned int it = 0; it < n_timesteps_at_once; ++it)
+      Assert(output_functional_eval.n() >= prev_output_functional_eval.size(),
+             ExcLowerRange(output_functional_eval.n(),
+                           prev_output_functional_eval.size()));
+      for (unsigned int it = 0; it < blk_slice.n_timesteps_at_once(); ++it)
         {
           if (is_cgp)
-            std::copy_n(prev_output_pt_eval.begin(),
-                        prev_output_pt_eval.size(),
-                        output_pt_eval.begin(0));
-          for (unsigned int t_dof = 0; t_dof < nt_dofs; ++t_dof)
+            {
+              std::copy_n(prev_output_pt_eval.begin(),
+                          prev_output_pt_eval.size(),
+                          output_pt_eval.begin(0));
+              std::copy_n(prev_output_functional_eval.begin(),
+                          prev_output_functional_eval.size(),
+                          output_functional_eval.begin(0));
+            }
+          for (unsigned int t_dof = 0; t_dof < blk_slice.n_timedofs(); ++t_dof)
             {
               i_eval_f = blk_slice.index(it, 1, t_dof);
               output_point_evaluation =
@@ -726,8 +826,21 @@ test(dealii::ConditionalOStream &pcout,
               std::copy_n(output_point_evaluation.begin(),
                           output_point_evaluation.size(),
                           output_pt_eval.begin(t_dof + is_cgp));
+
+              BlockVectorSliceT<Number> slice = blk_slice.get_variable(
+                const_cast<BlockVectorT<Number> const &>(x), it, t_dof);
+              auto dl = Stokes_mf.compute_drag_lift(slice,
+                                                    obstacle_id,
+                                                    drag_lift_constant);
+              dl.unroll(output_functional_eval.begin(t_dof + is_cgp),
+                        output_functional_eval.begin(t_dof + is_cgp) + dim);
+              output_functional_eval(t_dof + is_cgp, dim) =
+                Stokes_mf.compute_divergence(slice[0].get(), cell_vector);
             }
           time_evaluator.mmult(output_pt_eval_res, output_pt_eval);
+          time_evaluator.mmult(output_functional_eval_res,
+                               output_functional_eval);
+
           if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
             {
               std::ofstream file(parameters.functional_file, std::ios::app);
@@ -738,18 +851,30 @@ test(dealii::ConditionalOStream &pcout,
                   for (unsigned int c = 0; c < output_pt_eval_res.n(); ++c)
                     file << std::setw(16) << std::scientific << " "
                          << output_pt_eval_res(row, c);
+                  for (unsigned int c = 0; c < output_functional_eval_res.n();
+                       ++c)
+                    file << std::setw(16) << std::scientific << " "
+                         << output_functional_eval_res(row, c);
                   file << '\n';
                 }
               file << '\n';
             }
 
           prev_output_pt_eval = output_point_evaluation;
+          std::copy_n(output_functional_eval.begin(output_functional_eval.n() -
+                                                   1),
+                      prev_output_functional_eval.size(),
+                      prev_output_functional_eval.begin());
         }
     };
     auto const data_output =
       [&](VectorType const &v, VectorType const &p, std::string const &name) {
         DataOut<dim> data_out;
-        data_out.add_data_vector(dof_handler_u, v, "u");
+        static const std::vector<
+          dealii::DataComponentInterpretation::DataComponentInterpretation>
+          dci(dim,
+              dealii::DataComponentInterpretation::component_is_part_of_vector);
+        data_out.add_data_vector(dof_handler_u, v, "u", dci);
         data_out.add_data_vector(dof_handler_p, p, "p");
         data_out.build_patches();
         data_out.set_flags(DataOutBase::VtkFlags(time, timestep_number));
@@ -767,7 +892,21 @@ test(dealii::ConditionalOStream &pcout,
 
         equ(prev_x,
             blk_slice.get_variable(x, n_timesteps_at_once - 1, nt_dofs - 1));
-        step->solve(x, prev_x, timestep_number, time, time_step_size);
+        if (!parameters.nitsche_boundary)
+          {
+            get_inhomogeneous_boundary(boundary_values,
+                                       time,
+                                       time_step_size,
+                                       parameters.type,
+                                       0,
+                                       blk_slice,
+                                       d_map,
+                                       mapping,
+                                       dof_handler_u);
+            set_inhomogeneity_zero(x, boundary_values);
+          }
+        step->solve(x, prev_x, rhs, timestep_number, time, time_step_size);
+
         total_gmres_iterations += step->last_step();
 
         for (unsigned int v = 0; v < 2; ++v)
@@ -776,15 +915,23 @@ test(dealii::ConditionalOStream &pcout,
             for (auto &vec : var)
               constraints[v]->distribute(vec.get());
           }
+        if (!parameters.nitsche_boundary)
+          set_inhomogeneity(x, boundary_values);
         x.update_ghost_values();
-        if (parameters.mean_pressure == true)
+        if (stokes_parameters.mean_pressure)
           {
             auto p_tc = blk_slice.get_time(x, 1);
             for (auto &p : p_tc)
               {
                 double const mean_pressure = VectorTools::compute_mean_value(
                   mapping, dof_handler_p, quad_p, p.get(), 0);
-                p.get().add(-mean_pressure);
+                if (stokes_parameters.dg_pressure)
+                  VectorTools::add_constant(p.get(),
+                                            dof_handler_p,
+                                            0,
+                                            -mean_pressure);
+                else
+                  p.get().add(-mean_pressure);
               }
           }
 
@@ -955,7 +1102,7 @@ main(int argc, char **argv)
                "prefix of the log file, default is 'proc'");
   }
   std::string filename =
-    log_file_prefix + file +
+    log_file_prefix +
     std::to_string(dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD)) +
     ".log";
   std::ofstream pout(filename);
