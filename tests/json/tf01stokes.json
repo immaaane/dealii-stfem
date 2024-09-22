@@ -10,6 +10,8 @@
     "nTimestepsAtOnce"       : "1",
     "feDegree"               : "1",
     "feDegreeMin"            : "0",
+    "relativeTolerance"       : "1e-8",
+    "coarseGridSmootherType" : "Solver",
     "coarseningType"         : "space_and_time",
     "nDegCycles"             : "3",
     "nRefCycles"             : "4",
@@ -18,5 +20,6 @@
     "refinement"             : "1",
     "smoothingSteps"         : "1",
     "smoothingRange"         : "5.0",
+    "coarseGridMaxiter"      : "10",
     "additionalFile"         : "tests/json/stokes.json"
 }

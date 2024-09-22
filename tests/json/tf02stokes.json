@@ -9,6 +9,7 @@
     "nTimestepsAtOnce"       : "1",
     "feDegree"               : "1",
     "feDegreeMin"            : "1",
+    "coarseGridSmootherType" : "Solver",
     "coarseningType"         : "space_and_time",
     "nDegCycles"             : "3",
     "nRefCycles"             : "4",
