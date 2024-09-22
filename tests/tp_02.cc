@@ -104,9 +104,26 @@ test2(TimeStepType type, const unsigned int r, unsigned int n_timesteps_at_once)
   print_formatted(rhs_vM);
 }
 
+
+
+void
+test3(TimeStepType type, const unsigned int r, unsigned int n_timesteps_at_once)
+{
+  auto [Alpha, Beta, Gamma, Zeta] =
+    get_fe_time_weights_stokes<double>(type, r, 1.0, n_timesteps_at_once);
+  std::cout << "Stokes " << (type == TimeStepType::CGP ? "CG(" : "DG(") << r
+            << ") - " << n_timesteps_at_once << " timesteps in one system"
+            << std::endl;
+  print_formatted(Alpha);
+  print_formatted(Beta);
+  print_formatted(Gamma);
+  print_formatted(Zeta);
+}
+
 int
 main()
 {
+  block_indexing::set_variable_major(true);
   test(TimeStepType::CGP, 1);
   test(TimeStepType::CGP, 2);
   test(TimeStepType::CGP, 3);
@@ -130,4 +147,26 @@ main()
   test2(TimeStepType::CGP, 2, 4);
   test2(TimeStepType::DG, 1, 4);
   test2(TimeStepType::DG, 2, 4);
+
+  test3(TimeStepType::DG, 0, 1);
+  test3(TimeStepType::CGP, 1, 1);
+  test3(TimeStepType::DG, 1, 1);
+  test3(TimeStepType::CGP, 2, 1);
+  test3(TimeStepType::DG, 2, 1);
+  test3(TimeStepType::CGP, 3, 1);
+  test3(TimeStepType::DG, 3, 1);
+  test3(TimeStepType::CGP, 4, 1);
+  test3(TimeStepType::DG, 4, 1);
+  test3(TimeStepType::CGP, 1, 1);
+  test3(TimeStepType::CGP, 2, 1);
+  test3(TimeStepType::DG, 1, 1);
+  test3(TimeStepType::DG, 2, 1);
+  test3(TimeStepType::CGP, 1, 2);
+  test3(TimeStepType::CGP, 2, 2);
+  test3(TimeStepType::DG, 1, 2);
+  test3(TimeStepType::DG, 2, 2);
+  test3(TimeStepType::CGP, 1, 4);
+  test3(TimeStepType::CGP, 2, 4);
+  test3(TimeStepType::DG, 1, 4);
+  test3(TimeStepType::DG, 2, 4);
 }

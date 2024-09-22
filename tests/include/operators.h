@@ -12,8 +12,8 @@
 #include <boost/random/mersenne_twister.hpp>
 #include <boost/random/uniform_real_distribution.hpp>
 
+#include "compute_block_matrix.h"
 #include "types.h"
-
 namespace dealii
 {
   template <typename Number>
@@ -58,6 +58,21 @@ namespace dealii
   }
 
   template <typename Number>
+  void
+  tensorproduct_add(MutableBlockVectorSliceT<Number> &c,
+                    FullMatrix<Number> const         &A,
+                    BlockVectorSliceT<Number> const  &b,
+                    int                               block_offset = 0)
+  {
+    const unsigned int n_blocks = A.n();
+    const unsigned int m_blocks = A.m();
+    for (unsigned int i = 0; i < m_blocks; ++i)
+      for (unsigned int j = 0; j < n_blocks; ++j)
+        if (A(i, j) != 0.0)
+          c[block_offset + i].get().add(A(i, j), b[block_offset + j].get());
+  }
+
+  template <typename Number>
   BlockVectorT<Number>
   operator*(const FullMatrix<Number> &A, BlockVectorT<Number> const &b)
   {
@@ -68,18 +83,20 @@ namespace dealii
     return c;
   }
 
-  template <typename Number, typename SystemMatrixType>
-  class SystemMatrix final : public Subscriptor
+  template <typename Number,
+            typename SystemMatrixTypeK,
+            typename SystemMatrixTypeM = SystemMatrixTypeK>
+  class SystemMatrixBase : public Subscriptor
   {
   public:
     using BlockVectorType = BlockVectorT<Number>;
     using VectorType      = VectorT<Number>;
 
-    SystemMatrix(TimerOutput              &timer,
-                 const SystemMatrixType   &K,
-                 const SystemMatrixType   &M,
-                 const FullMatrix<Number> &Alpha_,
-                 const FullMatrix<Number> &Beta_)
+    SystemMatrixBase(TimerOutput              &timer,
+                     const SystemMatrixTypeK  &K,
+                     const SystemMatrixTypeM  &M,
+                     const FullMatrix<Number> &Alpha_,
+                     const FullMatrix<Number> &Beta_)
       : timer(timer)
       , K(K)
       , M(M)
@@ -91,162 +108,52 @@ namespace dealii
       AssertDimension(Alpha.m(), Beta.m());
       AssertDimension(Alpha.n(), Beta.n());
     }
-    void
-    vmult(BlockVectorType &dst, const BlockVectorType &src) const
-    {
-      TimerOutput::Scope scope(timer, "vmult");
+    virtual void
+    vmult(BlockVectorType &dst, const BlockVectorType &src) const = 0;
 
-      const unsigned int n_blocks = src.n_blocks();
-      AssertDimension(Alpha.m(), n_blocks);
-      dst = 0.0;
-      VectorType tmp;
-      K.initialize_dof_vector(tmp);
-      for (unsigned int i = 0; i < n_blocks; ++i)
-        {
-          K.vmult(tmp, src.block(i));
-
-          for (unsigned int j = 0; j < n_blocks; ++j)
-            if (Alpha(j, i) != 0.0)
-              dst.block(j).add(Alpha(j, i), tmp);
-        }
-
-      M.initialize_dof_vector(tmp);
-      for (unsigned int i = 0; i < n_blocks; ++i)
-        {
-          M.vmult(tmp, src.block(i));
-
-          for (unsigned int j = 0; j < n_blocks; ++j)
-            if (Beta(j, i) != 0.0)
-              dst.block(j).add(Beta(j, i), tmp);
-        }
-    }
-
-    void
-    Tvmult(BlockVectorType &dst, const BlockVectorType &src) const
-    {
-      TimerOutput::Scope scope(timer, "Tvmult");
-
-      const unsigned int n_blocks = src.n_blocks();
-
-      dst = 0.0;
-      VectorType tmp;
-      K.initialize_dof_vector(tmp);
-      for (unsigned int i = 0; i < n_blocks; ++i)
-        {
-          K.vmult(tmp, src.block(i));
-
-          for (unsigned int j = 0; j < n_blocks; ++j)
-            if (Alpha(i, j) != 0.0)
-              dst.block(j).add(Alpha(i, j), tmp);
-        }
-
-      M.initialize_dof_vector(tmp);
-      for (unsigned int i = 0; i < n_blocks; ++i)
-        {
-          M.vmult(tmp, src.block(i));
-
-          for (unsigned int j = 0; j < n_blocks; ++j)
-            if (Beta(i, j) != 0.0)
-              dst.block(j).add(Beta(i, j), tmp);
-        }
-    }
+    virtual void
+    Tvmult(BlockVectorType &dst, const BlockVectorType &src) const = 0;
 
     // Specialization for a nx1 matrix. Useful for rhs assembly
-    void
-    vmult_add(BlockVectorType &dst, const VectorType &src) const
-    {
-      TimerOutput::Scope scope(timer, "vmult");
+    virtual void
+    vmult_slice_add(BlockVectorType &dst, BlockVectorType const &src) const = 0;
 
-      const unsigned int n_blocks = dst.n_blocks();
-
-      VectorType tmp;
-      if (!alpha_is_zero)
-        {
-          K.initialize_dof_vector(tmp);
-          K.vmult(tmp, src);
-          for (unsigned int j = 0; j < n_blocks; ++j)
-            if (Alpha(j, 0) != 0.0)
-              dst.block(j).add(Alpha(j, 0), tmp);
-        }
-
-      if (!beta_is_zero)
-        {
-          M.initialize_dof_vector(tmp);
-          M.vmult(tmp, src);
-          for (unsigned int j = 0; j < n_blocks; ++j)
-            if (Beta(j, 0) != 0.0)
-              dst.block(j).add(Beta(j, 0), tmp);
-        }
-    }
-
-    void
-    vmult(BlockVectorType &dst, const VectorType &src) const
+    virtual void
+    vmult_slice(BlockVectorType &dst, BlockVectorType const &src) const
     {
       dst = 0.0;
-      vmult_add(dst, src);
+      vmult_slice_add(dst, src);
     }
 
-    std::shared_ptr<DiagonalMatrix<BlockVectorType>>
-    get_matrix_diagonal() const
-    {
-      BlockVectorType vec(Alpha.m());
-      for (unsigned int i = 0; i < Alpha.m(); ++i)
-        {
-          vec.block(i) = K.get_matrix_diagonal()->get_vector();
-          vec.block(i).sadd(Alpha(i, i),
-                            Beta(i, i),
-                            M.get_matrix_diagonal()->get_vector());
-        }
-      return std::make_shared<DiagonalMatrix<BlockVectorType>>(vec);
-    }
-
-    std::shared_ptr<DiagonalMatrix<BlockVectorType>>
-    get_matrix_diagonal_inverse() const
-    {
-      BlockVectorType vec(Alpha.m());
-      for (unsigned int i = 0; i < Alpha.m(); ++i)
-        {
-          vec.block(i) = K.get_matrix_diagonal_inverse()->get_vector();
-          vec.block(i).sadd(1. / Alpha(i, i),
-                            1. / Beta(i, i),
-                            M.get_matrix_diagonal_inverse()->get_vector());
-        }
-      return std::make_shared<DiagonalMatrix<BlockVectorType>>(vec);
-    }
-
-    types::global_dof_index
+    virtual types::global_dof_index
     m() const
     {
-      return Alpha.m() * M.m();
+      return Alpha.m() * std::max(K.m(), M.m());
     }
 
-    Number
+    virtual types::global_dof_index
+    n() const
+    {
+      AssertDimension(m(), Alpha.n() * std::max(K.m(), M.m()));
+      return m();
+    }
+
+    virtual Number
     el(unsigned int, unsigned int) const
     {
       Assert(false, ExcNotImplemented());
       return 0.0;
     }
 
-    template <typename Number2>
-    void
-    initialize_dof_vector(VectorT<Number2> &vec) const
-    {
-      K.initialize_dof_vector(vec);
-    }
+    virtual std::shared_ptr<DiagonalMatrix<BlockVectorType>>
+    get_matrix_diagonal() const = 0;
+    virtual std::shared_ptr<DiagonalMatrix<BlockVectorType>>
+    get_matrix_diagonal_inverse() const = 0;
 
-    template <typename Number2>
-    void
-    initialize_dof_vector(BlockVectorT<Number2> &vec) const
-    {
-      vec.reinit(Alpha.m());
-      for (unsigned int i = 0; i < vec.n_blocks(); ++i)
-        this->initialize_dof_vector(vec.block(i));
-    }
-
-  private:
+  protected:
     TimerOutput              &timer;
-    const SystemMatrixType   &K;
-    const SystemMatrixType   &M;
+    const SystemMatrixTypeK  &K;
+    const SystemMatrixTypeM  &M;
     const FullMatrix<Number> &Alpha;
     const FullMatrix<Number> &Beta;
 
@@ -254,6 +161,350 @@ namespace dealii
     bool alpha_is_zero;
     bool beta_is_zero;
   };
+
+
+  template <typename Number, typename SystemMatrixType>
+  class SystemMatrix final : public SystemMatrixBase<Number, SystemMatrixType>
+  {
+  public:
+    using BlockVectorType = BlockVectorT<Number>;
+    using VectorType      = VectorT<Number>;
+
+    SystemMatrix(TimerOutput              &timer,
+                 const SystemMatrixType   &K,
+                 const SystemMatrixType   &M,
+                 const FullMatrix<Number> &Alpha_,
+                 const FullMatrix<Number> &Beta_)
+      : SystemMatrixBase<Number, SystemMatrixType>(timer, K, M, Alpha_, Beta_)
+    {}
+
+    virtual void
+    vmult(BlockVectorType &dst, const BlockVectorType &src) const override
+    {
+      TimerOutput::Scope scope(this->timer, "vmult");
+
+      const unsigned int n_blocks = src.n_blocks();
+      AssertDimension(this->Alpha.m(), n_blocks);
+      dst = 0.0;
+      VectorType tmp;
+      this->K.initialize_dof_vector(tmp);
+      for (unsigned int i = 0; i < n_blocks; ++i)
+        {
+          this->K.vmult(tmp, src.block(i));
+
+          for (unsigned int j = 0; j < n_blocks; ++j)
+            if (this->Alpha(j, i) != 0.0)
+              dst.block(j).add(this->Alpha(j, i), tmp);
+
+          this->M.vmult(tmp, src.block(i));
+          for (unsigned int j = 0; j < n_blocks; ++j)
+            if (this->Beta(j, i) != 0.0)
+              dst.block(j).add(this->Beta(j, i), tmp);
+        }
+    }
+
+    virtual void
+    Tvmult(BlockVectorType &dst, const BlockVectorType &src) const override
+    {
+      TimerOutput::Scope scope(this->timer, "Tvmult");
+
+      const unsigned int n_blocks = src.n_blocks();
+
+      dst = 0.0;
+      VectorType tmp;
+      this->K.initialize_dof_vector(tmp);
+      for (unsigned int i = 0; i < n_blocks; ++i)
+        {
+          this->K.vmult(tmp, src.block(i));
+          for (unsigned int j = 0; j < n_blocks; ++j)
+            if (this->Alpha(i, j) != 0.0)
+              dst.block(j).add(this->Alpha(i, j), tmp);
+
+          this->M.vmult(tmp, src.block(i));
+          for (unsigned int j = 0; j < n_blocks; ++j)
+            if (this->Beta(i, j) != 0.0)
+              dst.block(j).add(this->Beta(i, j), tmp);
+        }
+    }
+
+    // Specialization for a nx1 matrix. Useful for rhs assembly
+    virtual void
+    vmult_slice_add(BlockVectorType       &dst,
+                    BlockVectorType const &src) const override
+    {
+      TimerOutput::Scope scope(this->timer, "vmult");
+
+      const unsigned int n_blocks = dst.n_blocks();
+
+      VectorType tmp;
+      this->K.initialize_dof_vector(tmp);
+      if (!this->alpha_is_zero)
+        {
+          this->K.vmult(tmp, src.block(0));
+          for (unsigned int j = 0; j < n_blocks; ++j)
+            if (this->Alpha(j, 0) != 0.0)
+              dst.block(j).add(this->Alpha(j, 0), tmp);
+        }
+
+      if (!this->beta_is_zero)
+        {
+          this->M.vmult(tmp, src.block(0));
+          for (unsigned int j = 0; j < n_blocks; ++j)
+            if (this->Beta(j, 0) != 0.0)
+              dst.block(j).add(this->Beta(j, 0), tmp);
+        }
+    }
+
+    virtual std::shared_ptr<DiagonalMatrix<BlockVectorType>>
+    get_matrix_diagonal() const override
+    {
+      BlockVectorType vec(this->Alpha.m());
+      for (unsigned int i = 0; i < this->Alpha.m(); ++i)
+        {
+          vec.block(i) = this->K.get_matrix_diagonal()->get_vector();
+          vec.block(i).sadd(this->Alpha(i, i),
+                            this->Beta(i, i),
+                            this->M.get_matrix_diagonal()->get_vector());
+        }
+      return std::make_shared<DiagonalMatrix<BlockVectorType>>(vec);
+    }
+
+    virtual std::shared_ptr<DiagonalMatrix<BlockVectorType>>
+    get_matrix_diagonal_inverse() const override
+    {
+      BlockVectorType vec(this->Alpha.m());
+      for (unsigned int i = 0; i < this->Alpha.m(); ++i)
+        {
+          vec.block(i) = this->K.get_matrix_diagonal_inverse()->get_vector();
+          vec.block(i).sadd(
+            1. / this->Alpha(i, i),
+            1. / this->Beta(i, i),
+            this->M.get_matrix_diagonal_inverse()->get_vector());
+        }
+      return std::make_shared<DiagonalMatrix<BlockVectorType>>(vec);
+    }
+
+    virtual types::global_dof_index
+    m() const override
+    {
+      return this->Alpha.m() * this->M.m();
+    }
+
+    template <typename Number2>
+    void
+    initialize_dof_vector(VectorT<Number2> &vec, unsigned int = 1) const
+    {
+      this->K.initialize_dof_vector(vec);
+    }
+
+    template <typename Number2>
+    void
+    initialize_dof_vector(BlockVectorT<Number2> &vec) const
+    {
+      vec.reinit(this->Alpha.m());
+      for (unsigned int i = 0; i < vec.n_blocks(); ++i)
+        this->initialize_dof_vector(vec.block(i));
+    }
+  };
+
+
+  template <typename Number, typename StokesMatrixType, typename MassMatrixType>
+  class SystemMatrixStokes final
+    : public SystemMatrixBase<Number, StokesMatrixType, MassMatrixType>
+  {
+  public:
+    using BlockVectorType = BlockVectorT<Number>;
+    using VectorType      = VectorT<Number>;
+
+    SystemMatrixStokes(TimerOutput              &timer,
+                       const StokesMatrixType   &K,
+                       const MassMatrixType     &M,
+                       const FullMatrix<Number> &Alpha_,
+                       const FullMatrix<Number> &Beta_,
+                       const BlockSlice         &blk_slice_)
+      : SystemMatrixBase<Number, StokesMatrixType, MassMatrixType>(timer,
+                                                                   K,
+                                                                   M,
+                                                                   Alpha_,
+                                                                   Beta_)
+      , blk_slice(blk_slice_)
+    {}
+
+
+    virtual void
+    vmult(BlockVectorType &dst, const BlockVectorType &src) const override
+    {
+      TimerOutput::Scope scope(this->timer, "vmult");
+      AssertDimension(this->Alpha.m(), src.n_blocks());
+      dst = 0.0;
+      BlockVectorType tmp(2);
+      this->K.initialize_dof_vector(tmp);
+      BlockVectorType tmp_src(tmp.n_blocks());
+      auto const     &n_timesteps_at_once = blk_slice.n_timesteps_at_once();
+      for (unsigned int it = 0; it < n_timesteps_at_once; ++it)
+        for (unsigned int id = 0; id < blk_slice.n_timedofs(); ++id)
+          {
+            auto slice =
+              blk_slice.get_variable(const_cast<BlockVectorType &>(src),
+                                     it,
+                                     id);
+            swap(tmp_src, slice);
+            // Stokes
+            this->K.vmult(tmp, tmp_src);
+            for (unsigned int jt = 0; jt < n_timesteps_at_once; ++jt)
+              for (unsigned int jd = 0; jd < blk_slice.n_timedofs(); ++jd)
+                for (unsigned int jv = 0; jv < blk_slice.n_variables(); ++jv)
+                  scatter(
+                    dst, tmp, this->Alpha, blk_slice, jt, jv, jd, it, 0, id);
+
+            // \partial_t v
+            this->M.vmult(tmp.block(0), tmp_src.block(0));
+            for (unsigned int jt = 0; jt < n_timesteps_at_once; ++jt)
+              for (unsigned int jd = 0; jd < blk_slice.n_timedofs(); ++jd)
+                scatter(dst, tmp, this->Beta, blk_slice, 0, jt, jd, it, id);
+
+            swap(slice, tmp_src);
+          }
+    }
+
+    virtual void
+    Tvmult(BlockVectorType &dst, const BlockVectorType &src) const override
+    {
+      TimerOutput::Scope scope(this->timer, "vmult");
+      AssertDimension(this->Alpha.m(), src.n_blocks());
+      dst = 0.0;
+      BlockVectorType tmp(2);
+      this->K.initialize_dof_vector(tmp);
+      BlockVectorType tmp_src(tmp.n_blocks());
+
+      auto const &n_timesteps_at_once = blk_slice.n_timesteps_at_once();
+      for (unsigned int it = 0; it < n_timesteps_at_once; ++it)
+        for (unsigned int id = 0; id < blk_slice.n_timedofs(); ++id)
+          {
+            auto slice =
+              blk_slice.get_variable(const_cast<BlockVectorType &>(src),
+                                     it,
+                                     id);
+            swap(tmp_src, slice);
+            //  Stokes
+            this->K.vmult(tmp, tmp_src);
+            for (unsigned int jt = 0; jt < n_timesteps_at_once; ++jt)
+              for (unsigned int jd = 0; jd < blk_slice.n_timedofs(); ++jd)
+                for (unsigned int v = 0; v < blk_slice.n_variables(); ++v)
+                  scatter(dst, tmp, this->Alpha, blk_slice, v, it, id, jt, jd);
+
+            // \partial_t v
+            this->M.vmult(tmp.block(0), tmp_src.block(0));
+            for (unsigned int jt = 0; jt < n_timesteps_at_once; ++jt)
+              for (unsigned int jd = 0; jd < blk_slice.n_timedofs(); ++jd)
+                scatter(dst, tmp, this->Beta, blk_slice, 0, it, id, jt, jd);
+
+            swap(slice, tmp_src);
+          }
+    }
+
+    // Specialization for a nx1 matrix. Useful for rhs assembly
+    virtual void
+    vmult_slice_add(BlockVectorType       &dst,
+                    BlockVectorType const &src) const override
+    {
+      TimerOutput::Scope scope(this->timer, "vmult");
+      AssertDimension(this->Alpha.n(), 1);
+      AssertDimension(src.n_blocks(), blk_slice.n_variables());
+
+      BlockVectorType tmp(2);
+      this->K.initialize_dof_vector(tmp);
+      BlockVectorType tmp_src(tmp.n_blocks());
+
+      for (unsigned int it = 0; it < blk_slice.n_timesteps_at_once(); ++it)
+        for (unsigned int id = 0; id < blk_slice.n_timedofs(); ++id)
+          {
+            // Stokes
+            if (!this->alpha_is_zero)
+              {
+                this->K.vmult(tmp, src);
+                for (unsigned int v = 0; v < blk_slice.n_variables(); ++v)
+                  scatter(dst, tmp, this->Alpha, blk_slice, it, v, id, 0, 0, 0);
+              }
+            // \partial_t v
+            if (!this->beta_is_zero)
+              {
+                this->M.vmult(tmp.block(0), src.block(0));
+                scatter(dst, tmp, this->Beta, blk_slice, it, 0, id, 0, 0, 0);
+              }
+          }
+    }
+
+    virtual std::shared_ptr<DiagonalMatrix<BlockVectorType>>
+    get_matrix_diagonal() const override
+    {
+      Assert(false, ExcNotImplemented());
+      return std::make_shared<DiagonalMatrix<BlockVectorType>>();
+    }
+
+    virtual std::shared_ptr<DiagonalMatrix<BlockVectorType>>
+    get_matrix_diagonal_inverse() const override
+    {
+      Assert(false, ExcNotImplemented());
+      return std::make_shared<DiagonalMatrix<BlockVectorType>>();
+    }
+
+    template <typename Number2>
+    void
+    initialize_dof_vector(VectorT<Number2> &vec, unsigned int variable) const
+    {
+      this->K.initialize_dof_vector(vec, variable);
+    }
+
+    template <typename Number2>
+    void
+    initialize_dof_vector(BlockVectorT<Number2> &vec) const
+    {
+      vec.reinit(this->Alpha.m());
+      for (unsigned int i = 0; i < this->Alpha.m(); ++i)
+        {
+          auto const &[tsp, v, td] = blk_slice.decompose(i);
+          initialize_dof_vector(vec.block(i), v);
+        }
+    }
+
+  private:
+    void
+    scatter(BlockVectorType          &dst,
+            const BlockVectorType    &tmp,
+            const FullMatrix<Number> &matrix,
+            const BlockSlice         &blk_slice,
+            unsigned int              jt,
+            unsigned int              jv,
+            unsigned int              jd,
+            unsigned int              it,
+            unsigned int              iv,
+            unsigned int              id) const
+    {
+      unsigned int j = blk_slice.index(jt, jv, jd);
+      unsigned int i = blk_slice.index(it, iv, id);
+      if (std::abs(matrix(j, i)) > 10 * std::numeric_limits<Number>::epsilon())
+        dst.block(j).add(matrix(j, i), tmp.block(jv));
+    }
+
+
+    void
+    scatter(BlockVectorType          &dst,
+            const BlockVectorType    &tmp,
+            const FullMatrix<Number> &matrix,
+            const BlockSlice         &blk_slice,
+            unsigned int              v,
+            unsigned int              jt,
+            unsigned int              jd,
+            unsigned int              it,
+            unsigned int              id) const
+    {
+      scatter(dst, tmp, matrix, blk_slice, jt, v, jd, it, v, id);
+    }
+
+    BlockSlice blk_slice;
+  };
+
 
   template <int dim>
   class Coefficient final : public Function<dim>
@@ -352,13 +603,12 @@ namespace dealii
     }
   };
 
-  template <int dim, typename Number>
+  template <int dim, int n_components, typename Number>
   class MatrixFreeOperator
   {
   public:
     using BlockVectorType = BlockVectorT<Number>;
     using VectorType      = VectorT<Number>;
-
     MatrixFreeOperator(const Mapping<dim>              &mapping,
                        const DoFHandler<dim>           &dof_handler,
                        const AffineConstraints<Number> &constraints,
@@ -397,14 +647,23 @@ namespace dealii
     }
 
     void
-    compute_system_matrix(SparseMatrixType &sparse_matrix) const
+    compute_system_matrix(
+      SparseMatrixType                        &sparse_matrix,
+      dealii::AffineConstraints<Number> const *constraints = nullptr) const
     {
-      MatrixFreeTools::compute_matrix(
-        matrix_free,
-        matrix_free.get_affine_constraints(),
-        sparse_matrix,
-        &MatrixFreeOperator::do_cell_integral_local,
-        this);
+      if (constraints == nullptr)
+        constraints = &matrix_free.get_affine_constraints();
+      compute_matrix(matrix_free,
+                     *constraints,
+                     sparse_matrix,
+                     &MatrixFreeOperator::do_cell_integral_local,
+                     this);
+      // MatrixFreeTools::compute_matrix(
+      //   matrix_free,
+      //   matrix_free.get_affine_constraints(),
+      //   sparse_matrix,
+      //   &MatrixFreeOperator::do_cell_integral_local,
+      //   this);
     }
 
     std::shared_ptr<DiagonalMatrix<VectorType>> const &
@@ -462,7 +721,7 @@ namespace dealii
     }
 
   private:
-    using FECellIntegrator = FEEvaluation<dim, -1, 0, 1, Number>;
+    using FECellIntegrator = FEEvaluation<dim, -1, 0, n_components, Number>;
 
     void
     compute_diagonal()
@@ -559,5 +818,154 @@ namespace dealii
     bool                              has_laplace_coefficient = false;
     Table<2, VectorizedArray<Number>> mass_matrix_coefficient;
     Table<2, VectorizedArray<Number>> laplace_matrix_coefficient;
+  };
+  template <int dim, typename Number>
+  using MatrixFreeOperatorScalar = MatrixFreeOperator<dim, 1, Number>;
+  template <int dim, typename Number>
+  using MatrixFreeOperatorVector = MatrixFreeOperator<dim, dim, Number>;
+
+  template <int dim, typename Number>
+  class StokesMatrixFreeOperator
+  {
+  public:
+    using BlockVectorType = BlockVectorT<Number>;
+    using VectorType      = VectorT<Number>;
+
+    StokesMatrixFreeOperator(
+      const Mapping<dim>                                   &mapping,
+      const std::vector<const DoFHandler<dim> *>           &dof_handlers,
+      const std::vector<const AffineConstraints<Number> *> &constraints,
+      const std::vector<Quadrature<dim>>                   &quadrature,
+      const double                                          viscosity_)
+      : viscosity(viscosity_)
+    {
+      typename MatrixFree<dim, Number>::AdditionalData additional_data;
+      // additional_data.mapping_update_flags =
+      //   update_values | update_gradients | update_quadrature_points;
+      additional_data.mapping_update_flags = update_values | update_gradients;
+      matrix_free.reinit(
+        mapping, dof_handlers, constraints, quadrature, additional_data);
+    }
+
+    template <typename Number2>
+    void
+    initialize_dof_vector(BlockVectorT<Number2> &vec) const
+    {
+      vec.reinit(2);
+      initialize_dof_vector(vec.block(0), 0);
+      initialize_dof_vector(vec.block(1), 1);
+    }
+
+    template <typename Number2>
+    void
+    initialize_dof_vector(
+      const std::vector<std::reference_wrapper<VectorT<Number2>>> &vec) const
+    {
+      initialize_dof_vector(vec[0].get(), 0);
+      initialize_dof_vector(vec[1].get(), 1);
+    }
+
+    template <typename Number2>
+    void
+    initialize_dof_vector(VectorT<Number2> &vec, unsigned int variable) const
+    {
+      matrix_free.initialize_dof_vector(vec, variable);
+    }
+
+    void
+    vmult(BlockVectorType &dst, const BlockVectorType &src) const
+    {
+      matrix_free.cell_loop(&StokesMatrixFreeOperator::do_cell_integral_range,
+                            this,
+                            dst,
+                            src,
+                            true);
+    }
+
+    void
+    compute_system_matrix(
+      BlockSparseMatrixType                                 &sparse_matrix,
+      std::vector<const dealii::AffineConstraints<Number> *> constraints =
+        std::vector<const dealii::AffineConstraints<Number> *>()) const
+    {
+      if (constraints.empty())
+        constraints = std::vector<const dealii::AffineConstraints<Number> *>{
+          &matrix_free.get_affine_constraints(0),
+          &matrix_free.get_affine_constraints(1)};
+      compute_matrix(matrix_free,
+                     constraints,
+                     sparse_matrix,
+                     &StokesMatrixFreeOperator::do_cell_integral_local,
+                     this);
+    }
+
+    types::global_dof_index
+    m() const
+    {
+      return matrix_free.get_dof_handler(0).n_dofs() +
+             matrix_free.get_dof_handler(1).n_dofs();
+    }
+
+    Number
+    el(unsigned int, unsigned int) const
+    {
+      Assert(false, ExcNotImplemented());
+      return 0.0;
+    }
+
+  private:
+    using FECellIntegratorP = FEEvaluation<dim, -1, 0, 1, Number>;
+    using FECellIntegratorU = FEEvaluation<dim, -1, 0, dim, Number>;
+
+    void
+    do_cell_integral_range(
+      const MatrixFree<dim, Number>               &matrix_free,
+      BlockVectorType                             &dst,
+      const BlockVectorType                       &src,
+      const std::pair<unsigned int, unsigned int> &range) const
+    {
+      FECellIntegratorU velocity(matrix_free, 0);
+      FECellIntegratorP pressure(matrix_free, 1);
+      for (unsigned int cell = range.first; cell < range.second; ++cell)
+        {
+          velocity.reinit(cell);
+          velocity.read_dof_values(src.block(0));
+          pressure.reinit(cell);
+          pressure.read_dof_values(src.block(1));
+
+          do_cell_integral_local(velocity, pressure);
+
+          velocity.distribute_local_to_global(dst.block(0));
+          pressure.distribute_local_to_global(dst.block(1));
+        }
+    }
+
+
+    void
+    do_cell_integral_local(FECellIntegratorU &velocity,
+                           FECellIntegratorP &pressure) const
+    {
+      velocity.evaluate(EvaluationFlags::gradients);
+      pressure.evaluate(EvaluationFlags::values);
+
+      for (unsigned int q = 0; q < velocity.n_q_points; ++q)
+        {
+          auto grad_u = velocity.get_gradient(q);
+          auto div_u  = velocity.get_divergence(q);
+          auto p      = pressure.get_value(q);
+          pressure.submit_value(div_u, q);
+          grad_u *= viscosity;
+          for (unsigned int i = 0; i < dim; ++i)
+            grad_u[i][i] -= p;
+          velocity.submit_gradient(grad_u, q);
+        }
+
+      velocity.integrate(EvaluationFlags::gradients);
+      pressure.integrate(EvaluationFlags::values);
+    }
+
+    MatrixFree<dim, Number> matrix_free;
+
+    Number viscosity = 1.0;
   };
 } // namespace dealii

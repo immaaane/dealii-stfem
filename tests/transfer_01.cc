@@ -432,9 +432,9 @@ test(dealii::ConditionalOStream &pcout,
     Number frequency      = 1.0;
 
     // matrix-free operators
-    MatrixFreeOperator<dim, Number> K_mf(
+    MatrixFreeOperatorScalar<dim, Number> K_mf(
       mapping, dof_handler, constraints, quad, 0.0, 1.0);
-    MatrixFreeOperator<dim, Number> M_mf(
+    MatrixFreeOperatorScalar<dim, Number> M_mf(
       mapping, dof_handler, constraints, quad, 1.0, 0.0);
     K_mf.compute_system_matrix(K);
     M_mf.compute_system_matrix(M);
@@ -457,18 +457,18 @@ test(dealii::ConditionalOStream &pcout,
                       TimerOutput::cpu_and_wall_times);
 
     FullMatrix<Number> lhs_uK, lhs_uM, rhs_uK, rhs_uM, zero(Gamma.m(), 1);
-    std::unique_ptr<SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>
+    std::unique_ptr<SystemMatrix<Number, MatrixFreeOperatorScalar<dim, Number>>>
       rhs_matrix, matrix;
     lhs_uK = Alpha;
     lhs_uM = Beta;
     rhs_uK = (type == TimeStepType::CGP) ? Gamma : zero;
     rhs_uM = (type == TimeStepType::CGP) ? Zeta : Gamma;
-    matrix =
-      std::make_unique<SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
-        timer, K_mf, M_mf, lhs_uK, lhs_uM);
-    rhs_matrix =
-      std::make_unique<SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
-        timer, K_mf, M_mf, rhs_uK, rhs_uM);
+    matrix = std::make_unique<
+      SystemMatrix<Number, MatrixFreeOperatorScalar<dim, Number>>>(
+      timer, K_mf, M_mf, lhs_uK, lhs_uM);
+    rhs_matrix = std::make_unique<
+      SystemMatrix<Number, MatrixFreeOperatorScalar<dim, Number>>>(
+      timer, K_mf, M_mf, rhs_uK, rhs_uM);
 
     /// TimeGMG
     RepartitioningPolicyTools::DefaultPolicy<dim>          policy(true);
@@ -487,11 +487,11 @@ test(dealii::ConditionalOStream &pcout,
     MGLevelObject<std::shared_ptr<const SparseMatrixType>> mg_K(min_level,
                                                                 max_level);
     MGLevelObject<std::shared_ptr<
-      const SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>>
+      const SystemMatrix<Number, MatrixFreeOperatorScalar<dim, Number>>>>
       mg_operators(min_level, max_level);
-    MGLevelObject<std::shared_ptr<const MatrixFreeOperator<dim, Number>>>
+    MGLevelObject<std::shared_ptr<const MatrixFreeOperatorScalar<dim, Number>>>
       mg_M_mf(min_level, max_level);
-    MGLevelObject<std::shared_ptr<const MatrixFreeOperator<dim, Number>>>
+    MGLevelObject<std::shared_ptr<const MatrixFreeOperatorScalar<dim, Number>>>
       mg_K_mf(min_level, max_level);
     MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
       mg_constraints(min_level, max_level);
@@ -518,14 +518,14 @@ test(dealii::ConditionalOStream &pcout,
         constraints_->close();
 
         // matrix-free operators
-        auto K_mf_ = std::make_shared<MatrixFreeOperator<dim, Number>>(
+        auto K_mf_ = std::make_shared<MatrixFreeOperatorScalar<dim, Number>>(
           mapping, *dof_handler_, *constraints_, quad, 0.0, 1.0);
-        auto M_mf_ = std::make_shared<MatrixFreeOperator<dim, Number>>(
+        auto M_mf_ = std::make_shared<MatrixFreeOperatorScalar<dim, Number>>(
           mapping, *dof_handler_, *constraints_, quad, 1.0, 0.0);
 
 
         mg_operators[l] = std::make_shared<
-          SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>(
+          SystemMatrix<Number, MatrixFreeOperatorScalar<dim, Number>>>(
           timer, *K_mf_, *M_mf_, fetw[l][0], fetw[l][1]);
 
         auto sparsity_pattern_ = std::make_shared<SparsityPatternType>(
@@ -570,7 +570,7 @@ test(dealii::ConditionalOStream &pcout,
         matrix->initialize_dof_vector(*tmp2);
       }
     using Preconditioner =
-      TimeGMG<dim, SystemMatrix<Number, MatrixFreeOperator<dim, Number>>>;
+      TimeGMG<dim, SystemMatrix<Number, MatrixFreeOperatorScalar<dim, Number>>>;
     auto preconditioner = std::make_unique<Preconditioner>(timer,
                                                            type,
                                                            fe_degree,
@@ -648,16 +648,24 @@ test(dealii::ConditionalOStream &pcout,
                                                   *exact_solution,
                                                   evaluate_numerical_solution);
 
-    TimeIntegratorHeat<dim, Number, Preconditioner> step(type,
-                                                         fe_degree,
-                                                         Alpha_1,
-                                                         Gamma_1,
-                                                         1.e-12,
-                                                         *matrix,
-                                                         *preconditioner,
-                                                         *rhs_matrix,
-                                                         integrate_rhs_function,
-                                                         n_timesteps_at_once);
+    using TimeHeat = TimeIntegratorFO<
+      dim,
+      Number,
+      Preconditioner,
+      SystemMatrix<Number, MatrixFreeOperatorScalar<dim, Number>>>;
+    std::vector<std::function<void(const double, VectorType &)>>
+             integrate_rhs_function_{integrate_rhs_function};
+    TimeHeat step(type,
+                  fe_degree,
+                  Alpha_1,
+                  Gamma_1,
+                  1.e-12,
+                  *matrix,
+                  *preconditioner,
+                  *rhs_matrix,
+                  integrate_rhs_function_,
+                  n_timesteps_at_once,
+                  true);
 
     // interpolate initial value
     auto nt_dofs = static_cast<unsigned int>(n_blocks / n_timesteps_at_once);

@@ -3,14 +3,18 @@
     "printTiming"            : "false",
     "spaceTimeMg"            : "true",
     "mgTimeBeforeSpace"      : "false",
-    "timeType"               : "DG",
-    "problemType"            : "heat",
-    "nTimestepsAtOnce"       : "2",
+    "timeType"               : "CGP",
+    "problemType"            : "stokes",
+    "endTime"                : "1",
+    "nTimestepsAtOnce"       : "1",
     "feDegree"               : "1",
-    "feDegreeMin"            : "0",
+    "feDegreeMin"            : "1",
     "coarseningType"         : "space_and_time",
     "nDegCycles"             : "3",
     "nRefCycles"             : "4",
     "frequency"              : "1.0",
-    "refinement"             : "2"
+    "extrapolate"            : "true",
+    "refinement"             : "1",
+    "meanPressure"           : "true",
+    "viscosity"              : "1"
 }

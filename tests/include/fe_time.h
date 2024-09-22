@@ -9,8 +9,11 @@
 #include <deal.II/fe/fe_q.h>
 #include <deal.II/fe/fe_tools.h>
 
+#include <deal.II/multigrid/mg_transfer_global_coarsening.h>
+
 #include <array>
 
+#include "types.h"
 
 enum class TimeStepType : unsigned int
 {
@@ -40,32 +43,122 @@ namespace dealii
   std::array<FullMatrix<Number>, 2>
   get_cg_weights(unsigned int const r);
 
+  // version in deal.II only goes to 1
+  unsigned int
+  create_next_polynomial_coarsening_degree(
+    const unsigned int previous_fe_degree,
+    const MGTransferGlobalCoarseningTools::PolynomialCoarseningSequenceType
+      &p_sequence)
+  {
+    switch (p_sequence)
+      {
+        case MGTransferGlobalCoarseningTools::PolynomialCoarseningSequenceType::
+          bisect:
+          return std::max(previous_fe_degree / 2, 0u);
+        case MGTransferGlobalCoarseningTools::PolynomialCoarseningSequenceType::
+          decrease_by_one:
+          return std::max(previous_fe_degree - 1, 0u);
+        case MGTransferGlobalCoarseningTools::PolynomialCoarseningSequenceType::
+          go_to_one:
+          return 0u;
+        default:
+          DEAL_II_NOT_IMPLEMENTED();
+          return 0u;
+      }
+  }
+
+  inline std::vector<unsigned int>
+  get_poly_mg_sequence(
+    unsigned int const k_max,
+    unsigned int const k_min,
+    MGTransferGlobalCoarseningTools::PolynomialCoarseningSequenceType const
+      p_seq)
+  {
+    std::vector<unsigned int> degrees{k_max};
+    if (degrees.back() == k_min)
+      return degrees;
+    while (degrees.back() > k_min)
+      degrees.push_back(
+        dealii::create_next_polynomial_coarsening_degree(degrees.back(),
+                                                         p_seq));
+
+    std::reverse(degrees.begin(), degrees.end());
+    return degrees;
+  }
+
   inline std::vector<TimeMGType>
-  get_time_mg_sequence(unsigned int const n_sp_lvl,
-                       unsigned int const k_max,
-                       unsigned int const k_min,
-                       unsigned int const n_timesteps_at_once,
-                       unsigned int const n_timesteps_at_once_min = 1,
-                       TimeMGType const   lower_lvl         = TimeMGType::k,
-                       bool               time_before_space = false)
+  get_time_mg_sequence(
+    unsigned int const        n_sp_lvl,
+    std::vector<unsigned int> k_seq,
+    unsigned int const        n_timesteps_at_once,
+    unsigned int const        n_timesteps_at_once_min = 1,
+    TimeMGType                lower_lvl               = TimeMGType::k,
+    CoarseningType            coarsening_type = CoarseningType::space_and_time,
+    bool                      time_before_space = false)
   {
     Assert(n_sp_lvl >= 1, ExcLowerRange(n_sp_lvl, 1));
-    unsigned int n_k_lvl = k_max - k_min;
+    Assert(k_seq.size() >= 1, ExcLowerRange(k_seq.size(), 1));
+    unsigned int n_k_lvl = k_seq.size() - 1;
     unsigned int n_t_lvl =
       std::log2(n_timesteps_at_once / n_timesteps_at_once_min);
     auto upper_lvl =
       (lower_lvl == TimeMGType::k) ? TimeMGType::tau : TimeMGType::k;
+    if (time_before_space && coarsening_type == CoarseningType::space_and_time)
+      std::swap(upper_lvl, lower_lvl);
     unsigned int n_ll = (lower_lvl == TimeMGType::k) ? n_k_lvl : n_t_lvl;
     unsigned int n_ul = (lower_lvl == TimeMGType::k) ? n_t_lvl : n_k_lvl;
     std::vector<TimeMGType> mg_type_level(n_k_lvl + n_t_lvl + n_sp_lvl - 1,
                                           TimeMGType::none);
 
-    unsigned int start_lower_lvl = time_before_space ? n_sp_lvl - 1 : 0;
-    unsigned int start_upper_lvl =
-      time_before_space ? n_sp_lvl - 1 + n_ll : n_ll;
-    std::fill_n(mg_type_level.begin() + start_lower_lvl, n_ll, lower_lvl);
-    std::fill_n(mg_type_level.begin() + start_upper_lvl, n_ul, upper_lvl);
+    if (coarsening_type == CoarseningType::space_or_time)
+      {
+        unsigned int start_lower_lvl = time_before_space ? n_sp_lvl - 1 : 0;
+        unsigned int start_upper_lvl =
+          time_before_space ? n_sp_lvl - 1 + n_ll : n_ll;
+        std::fill_n(mg_type_level.begin() + start_lower_lvl, n_ll, lower_lvl);
+        std::fill_n(mg_type_level.begin() + start_upper_lvl, n_ul, upper_lvl);
+      }
+    else
+      {
+        unsigned int ii  = std::min(mg_type_level.size() - 1,
+                                   static_cast<size_t>((n_ul + n_ll) * 2 - 1));
+        unsigned int isp = 0;
+        for (unsigned int j = n_ul + n_ll; j > 0; --j)
+          {
+            if (isp < n_sp_lvl - 1)
+              mg_type_level[ii] = TimeMGType::none, --ii, ++isp;
+            mg_type_level[ii] = j <= n_ll ? lower_lvl : upper_lvl, --ii;
+          }
+        if (time_before_space)
+          std::reverse(mg_type_level.begin(), mg_type_level.end());
+      }
     return mg_type_level;
+  }
+
+  inline std::vector<size_t>
+  get_precondition_stmg_types(std::vector<TimeMGType> const &mg_type_level,
+                              CoarseningType                 coarsening_type,
+                              bool                           time_before_space)
+  {
+    std::vector<size_t> ret(mg_type_level.size() + 1, 1);
+    if (coarsening_type == CoarseningType::space_or_time)
+      return ret;
+    size_t start = time_before_space ? mg_type_level.size() - 1 : 0;
+    int    step  = time_before_space ? -1 : 1;
+    for (size_t i = start;
+         (time_before_space ? i > 0 : i < mg_type_level.size() - 1);
+         i += step)
+      {
+        if (mg_type_level[i] != TimeMGType::none &&
+            mg_type_level[i + step] == TimeMGType::none)
+          {
+            ret[i]        = time_before_space ? 0 : 1;
+            ret[i + step] = time_before_space ? 1 : 0;
+            i += step;
+          }
+      }
+
+    return ret;
   }
 
   template <int dim>
@@ -348,50 +441,51 @@ namespace dealii
     return ret;
   }
 
-  template <typename Number, typename NumberPreconditioner = Number>
-  std::vector<std::array<FullMatrix<NumberPreconditioner>, 4>>
-  get_fe_time_weights(TimeStepType                   type,
-                      unsigned int                   r,
-                      double                         time_step_size,
-                      unsigned int                   n_timesteps_at_once,
-                      std::vector<TimeMGType> const &mg_type_level)
+  template <typename Number,
+            typename F = std::array<FullMatrix<Number>, 4> (
+                &)(TimeStepType, unsigned int const, double, unsigned int)>
+  std::vector<std::array<FullMatrix<Number>, 4>>
+  get_fe_time_weights(TimeStepType                     type,
+                      double                           time_step_size,
+                      unsigned int                     n_timesteps_at_once,
+                      std::vector<TimeMGType> const   &mg_type_level,
+                      std::vector<unsigned int> const &poly_time_sequence,
+                      F const &get_fetw = get_fe_time_weights<Number>)
   {
-    std::vector<std::array<FullMatrix<NumberPreconditioner>, 4>> time_weights(
+    std::vector<std::array<FullMatrix<Number>, 4>> time_weights(
       mg_type_level.size() + 1);
-    auto tw = time_weights.rbegin();
-    *tw     = get_fe_time_weights<NumberPreconditioner>(type,
-                                                    r,
-                                                    time_step_size,
-                                                    n_timesteps_at_once);
+    auto tw   = time_weights.rbegin();
+    auto p_mg = poly_time_sequence.rbegin();
+    *tw       = get_fetw(type, *p_mg, time_step_size, n_timesteps_at_once);
     ++tw;
     for (auto mgt = mg_type_level.rbegin(); mgt != mg_type_level.rend();
          ++mgt, ++tw)
       {
         if (*mgt == TimeMGType::k)
-          --r;
+          ++p_mg;
         else if (*mgt == TimeMGType::tau)
           n_timesteps_at_once /= 2, time_step_size *= 2;
-        *tw = get_fe_time_weights<NumberPreconditioner>(type,
-                                                        r,
-                                                        time_step_size,
-                                                        n_timesteps_at_once);
+        *tw = get_fetw(type, *p_mg, time_step_size, n_timesteps_at_once);
       }
     Assert(tw == time_weights.rend(), ExcInternalError());
     return time_weights;
   }
 
-  template <typename Number, typename NumberPreconditioner = Number>
-  std::vector<std::array<FullMatrix<NumberPreconditioner>, 5>>
-  get_fe_time_weights_wave(TimeStepType                   type,
-                           unsigned int                   r,
-                           double                         time_step_size,
-                           unsigned int                   n_timesteps_at_once,
-                           std::vector<TimeMGType> const &mg_type_level)
+  template <typename Number>
+  std::vector<std::array<FullMatrix<Number>, 5>>
+  get_fe_time_weights_wave(TimeStepType                     type,
+                           double                           time_step_size,
+                           unsigned int                     n_timesteps_at_once,
+                           std::vector<TimeMGType> const   &mg_type_level,
+                           std::vector<unsigned int> const &poly_time_sequence)
   {
-    auto time_weights = get_fe_time_weights<Number, NumberPreconditioner>(
-      type, r, time_step_size, n_timesteps_at_once, mg_type_level);
-    std::vector<std::array<FullMatrix<NumberPreconditioner>, 5>>
-         time_weights_wave(mg_type_level.size() + 1);
+    auto time_weights = get_fe_time_weights<Number>(type,
+                                                    time_step_size,
+                                                    n_timesteps_at_once,
+                                                    mg_type_level,
+                                                    poly_time_sequence);
+    std::vector<std::array<FullMatrix<Number>, 5>> time_weights_wave(
+      mg_type_level.size() + 1);
     auto tw      = time_weights.rbegin();
     auto tw_wave = time_weights_wave.rbegin();
     *tw_wave =
@@ -400,10 +494,6 @@ namespace dealii
     for (auto mgt = mg_type_level.rbegin(); mgt != mg_type_level.rend();
          ++mgt, ++tw, ++tw_wave)
       {
-        if (*mgt == TimeMGType::k)
-          --r;
-        else if (*mgt == TimeMGType::tau)
-          n_timesteps_at_once /= 2, time_step_size *= 2;
         *tw_wave = get_fe_time_weights_wave(
           type, (*tw)[0], (*tw)[1], (*tw)[2], (*tw)[3]);
       }
@@ -438,22 +528,11 @@ namespace dealii
        FullMatrix<Number>(time_weights[0].m(), time_weights[0].n() - 1),
        FullMatrix<Number>(time_weights[0].m(), 1),
        FullMatrix<Number>(time_weights[0].m(), 1)}};
-
-    // Generate indices for the last columns (LHS) and the first column (RHS)
-    std::vector<unsigned> lhs_indices(time_weights[0].n() - 1);
-    std::iota(lhs_indices.begin(), lhs_indices.end(), 1);
-    std::vector<unsigned> const rhs_indices{0};
-
-    // Generate row indices
-    std::vector<unsigned> row_indices(time_weights[0].m());
-    std::iota(row_indices.begin(), row_indices.end(), 0);
-
     // Scatter matrices
-    ret[0].extract_submatrix_from(time_weights[0], row_indices, lhs_indices);
-    ret[1].extract_submatrix_from(time_weights[1], row_indices, lhs_indices);
-    ret[2].extract_submatrix_from(time_weights[0], row_indices, rhs_indices);
-    ret[3].extract_submatrix_from(time_weights[1], row_indices, rhs_indices);
-
+    ret[0].fill(time_weights[0], 0, 0, 0, 1);
+    ret[1].fill(time_weights[1], 0, 0, 0, 1);
+    ret[2].fill(time_weights[0], 0, 0, 0, 0);
+    ret[3].fill(time_weights[1], 0, 0, 0, 0);
     ret[2] *= -1.0;
     ret[3] *= -1.0;
     return ret;
@@ -474,6 +553,11 @@ namespace dealii
   std::array<FullMatrix<Number>, 2>
   get_cg_weights(unsigned int const r)
   {
+    static std::unordered_map<unsigned int, std::array<FullMatrix<Number>, 2>>
+      cache;
+    if (auto it = cache.find(r); it != cache.end())
+      return it->second;
+
     auto const trial_points = QGaussLobatto<1>(r + 1).get_points();
     std::vector<Point<1>> const test_points(trial_points.begin() + 1,
                                             trial_points.end());
@@ -508,13 +592,19 @@ namespace dealii
             quad.weight(q) * poly_test[i].value(quad.point(q)[0]) *
             poly_lobatto_derivative[j].value(quad.point(q)[0]);
 
-    return {{matrix, matrix_der}};
+    cache[r] = {{matrix, matrix_der}};
+    return cache[r];
   }
 
   template <typename Number>
   std::array<FullMatrix<Number>, 3>
   get_dg_weights(unsigned int const r)
   {
+    static std::unordered_map<unsigned int, std::array<FullMatrix<Number>, 3>>
+      cache;
+    if (auto it = cache.find(r); it != cache.end())
+      return it->second;
+
     // Radau quadrature
     auto const poly_radau = get_time_basis(TimeStepType::DG, r);
 
@@ -551,7 +641,9 @@ namespace dealii
               quad.weight(q) * poly_radau[i].value(quad.point(q)[0]) *
               poly_radau_derivative[j].value(quad.point(q)[0]);
         }
-    return {{lhs_matrix, lhs_matrix_der, jump_matrix}};
+
+    cache[r] = {{lhs_matrix, lhs_matrix_der, jump_matrix}};
+    return cache[r];
   }
 
   std::vector<size_t>
@@ -715,4 +807,374 @@ namespace dealii
     return restriction_n;
   }
 
+
+  class block_indexing
+  {
+  public:
+    block_indexing(block_indexing const &other)
+      : n_timesteps_at_once_(other.n_timesteps_at_once())
+      , n_variables_(other.n_variables())
+      , n_timedofs_(other.n_timedofs())
+      , cache(other.cache)
+    {}
+
+    block_indexing(block_indexing &&other) noexcept
+      : n_timesteps_at_once_(other.n_timesteps_at_once())
+      , n_variables_(other.n_variables())
+      , n_timedofs_(other.n_timedofs())
+      , cache(other.cache)
+    {}
+
+    block_indexing &
+    operator=(block_indexing const &) = default;
+    block_indexing &
+    operator=(block_indexing &&) noexcept = default;
+
+    block_indexing(unsigned int n_timesteps_at_once,
+                   unsigned int n_variables,
+                   unsigned int n_timedofs)
+      : n_timesteps_at_once_(n_timesteps_at_once)
+      , n_variables_(n_variables)
+      , n_timedofs_(n_timedofs)
+      , cache(n_blocks())
+    {
+      for (unsigned int i = 0; i < n_blocks(); ++i)
+        cache[i] = decompose(i);
+    }
+
+    static void
+    set_variable_major(bool is_variable_major_)
+    { // allow setting once
+      if (!is_variable_major_set)
+        is_variable_major = is_variable_major_;
+      is_variable_major_set = true;
+    }
+
+    static bool
+    get_variable_major()
+    {
+      return is_variable_major;
+    }
+
+    std::array<unsigned int, 3>
+    operator()(unsigned int index) const
+    {
+      Assert((n_blocks() - 1 >= index), ExcLowerRange(n_blocks() - 1, index));
+      return cache[index];
+    }
+
+    unsigned int
+    operator()(unsigned int timestep,
+               unsigned int variable,
+               unsigned int timedof) const
+    {
+      if (get_variable_major())
+        return timestep * (n_variables_ * n_timedofs_) +
+               variable * n_timedofs_ + timedof;
+      else
+        return timestep * (n_variables_ * n_timedofs_) +
+               timedof * n_variables_ + variable;
+    }
+
+    unsigned int
+    n_timesteps_at_once() const
+    {
+      return n_timesteps_at_once_;
+    }
+    unsigned int
+    n_variables() const
+    {
+      return n_variables_;
+    }
+    unsigned int
+    n_timedofs() const
+    {
+      return n_timedofs_;
+    }
+
+    unsigned int
+    n_blocks() const
+    {
+      return n_timedofs() * n_timesteps_at_once() * n_variables();
+    }
+
+  private:
+    std::array<unsigned int, 3>
+    decompose(unsigned int index) const
+    {
+      Assert((n_blocks() - 1 >= index), ExcLowerRange(n_blocks() - 1, index));
+      unsigned int timestep, variable, timedof;
+      if (get_variable_major())
+        {
+          timestep = index / (n_variables_ * n_timedofs_);
+          variable = (index % (n_variables_ * n_timedofs_)) / n_timedofs_;
+          timedof  = (index % (n_variables_ * n_timedofs_)) % n_timedofs_;
+        }
+      else
+        {
+          timestep = index / (n_variables_ * n_timedofs_);
+          timedof  = (index % (n_variables_ * n_timedofs_)) / n_variables_;
+          variable = (index % (n_variables_ * n_timedofs_)) % n_variables_;
+        }
+      return {{timestep, variable, timedof}};
+    }
+
+    unsigned int n_timesteps_at_once_, n_variables_, n_timedofs_;
+    std::vector<std::array<unsigned int, 3>> cache;
+
+    static bool is_variable_major;
+    static bool is_variable_major_set;
+  };
+
+  bool block_indexing::is_variable_major     = true;
+  bool block_indexing::is_variable_major_set = false;
+
+  class BlockSlice
+  {
+  public:
+    BlockSlice()
+      : idx(1, 1, 1)
+    {}
+
+    BlockSlice(BlockSlice const &other)
+      : idx(other.idx)
+    {}
+
+    BlockSlice(BlockSlice &&other) noexcept
+      : idx(std::move(other.idx))
+    {}
+
+    BlockSlice &
+    operator=(const BlockSlice &) = default;
+    BlockSlice &
+    operator=(BlockSlice &&) noexcept = default;
+
+    BlockSlice(unsigned int n_timesteps_at_once_,
+               unsigned int n_variables_,
+               unsigned int n_timedofs_)
+      : idx(n_timesteps_at_once_, n_variables_, n_timedofs_)
+    {}
+
+    std::vector<unsigned int>
+    get_variable(unsigned int timestep, unsigned int timedof) const
+    {
+      std::vector<unsigned int> indices;
+      indices.reserve(n_variables());
+
+      for (unsigned int variable = 0; variable < n_variables(); ++variable)
+        indices.push_back(idx(timestep, variable, timedof));
+
+      return indices;
+    }
+
+    std::vector<unsigned int>
+    get_time(unsigned int variable) const
+    {
+      std::vector<unsigned int> indices;
+      indices.reserve(n_timesteps_at_once() * n_timedofs());
+
+      for (unsigned int tsp = 0; tsp < n_timesteps_at_once(); ++tsp)
+        for (unsigned int timedof = 0; timedof < n_timedofs(); ++timedof)
+          indices.push_back(idx(tsp, variable, timedof));
+      return indices;
+    }
+
+    template <typename Number>
+    BlockVectorSliceT<Number>
+    get_slice(const BlockVectorT<Number>      &block_vector,
+              std::vector<unsigned int> const &indices) const
+    {
+      BlockVectorSliceT<Number> result;
+      result.reserve(indices.size());
+      for (unsigned int i = 0; i < indices.size(); ++i)
+        result.push_back(std::cref(block_vector.block(indices[i])));
+
+      return result;
+    }
+    template <typename Number>
+    MutableBlockVectorSliceT<Number>
+    get_slice(BlockVectorT<Number>            &block_vector,
+              std::vector<unsigned int> const &indices) const
+    {
+      MutableBlockVectorSliceT<Number> result;
+      result.reserve(indices.size());
+      for (unsigned int i = 0; i < indices.size(); ++i)
+        result.push_back(std::ref(block_vector.block(indices[i])));
+
+      return result;
+    }
+
+    template <typename Number>
+    BlockVectorSliceT<Number>
+    get_time(const BlockVectorT<Number> &block_vector,
+             unsigned int                variable) const
+    {
+      std::vector<unsigned int> indices = get_time(variable);
+      return get_slice(block_vector, indices);
+    }
+
+    template <typename Number>
+    MutableBlockVectorSliceT<Number>
+    get_time(BlockVectorT<Number> &block_vector, unsigned int variable) const
+    {
+      std::vector<unsigned int> indices = get_time(variable);
+      return get_slice(block_vector, indices);
+    }
+
+    template <typename Number>
+    BlockVectorSliceT<Number>
+    get_variable(const BlockVectorT<Number> &block_vector,
+                 unsigned int                timestep,
+                 unsigned int                timedof) const
+    {
+      auto indices = get_variable(timestep, timedof);
+      return get_slice(block_vector, indices);
+    }
+
+    template <typename Number>
+    MutableBlockVectorSliceT<Number>
+    get_variable(BlockVectorT<Number> &block_vector,
+                 unsigned int          timestep,
+                 unsigned int          timedof) const
+    {
+      auto indices = get_variable(timestep, timedof);
+      return get_slice(block_vector, indices);
+    }
+
+    template <typename Number>
+    BlockVectorSliceT<Number>
+    get_variable(const BlockVectorT<Number> &block_vector,
+                 unsigned int                time) const
+    {
+      unsigned int ts = time / n_timedofs();
+      unsigned int td = time % n_timedofs();
+      return get_variable(block_vector, ts, td);
+    }
+
+    template <typename Number>
+    MutableBlockVectorSliceT<Number>
+    get_variable(BlockVectorT<Number> &block_vector, unsigned int time) const
+    {
+      unsigned int ts = time / n_timedofs();
+      unsigned int td = time % n_timedofs();
+      return get_variable(block_vector, ts, td);
+    }
+    unsigned int
+    n_timesteps_at_once() const
+    {
+      return idx.n_timesteps_at_once();
+    }
+    unsigned int
+    n_variables() const
+    {
+      return idx.n_variables();
+    }
+    unsigned int
+    n_timedofs() const
+    {
+      return idx.n_timedofs();
+    }
+
+    unsigned int
+    n_blocks() const
+    {
+      return idx.n_blocks();
+    }
+
+    auto
+    decompose(unsigned int i) const
+    {
+      return idx(i);
+    }
+
+    auto
+    index(unsigned int timestep,
+          unsigned int variable,
+          unsigned int timedof) const
+    {
+      Assert((n_blocks() - 1 >= idx(timestep, variable, timedof)),
+             ExcLowerRange(n_blocks() - 1, idx(timestep, variable, timedof)));
+      return idx(timestep, variable, timedof);
+    }
+
+  private:
+    block_indexing idx;
+  };
+
+  template <typename Number>
+  std::array<FullMatrix<Number>, 4>
+  get_fe_time_weights_stokes(TimeStepType       type,
+                             unsigned int const r,
+                             double             time_step_size,
+                             unsigned int       n_timesteps_at_once = 1)
+  {
+    auto tw =
+      get_fe_time_weights<Number>(type, r, time_step_size, n_timesteps_at_once);
+    std::array<FullMatrix<Number>, 4> ret;
+    for (int i = 0; i < 2; ++i)
+      ret[i].reinit(tw[i].m() * 2, tw[i].n() * 2);
+    for (int i = 2; i < 4; ++i)
+      ret[i].reinit(tw[i].m() * 2, tw[i].n());
+    BlockSlice blk_slice(n_timesteps_at_once,
+                         2,
+                         (type == TimeStepType::DG) ? r + 1 : r);
+
+    for (int iv = 0; iv < 2; ++iv)
+      {
+        auto variable_indices = blk_slice.get_time(iv);
+        AssertDimension(variable_indices.size(), tw[0].m());
+        // Stokes
+        for (int jv = 0; jv < 2; ++jv)
+          {
+            auto jvariable_indices = blk_slice.get_time(jv);
+            if (!(jv == 1 && iv == 1))
+              tw[0].scatter_matrix_to(variable_indices,
+                                      jvariable_indices,
+                                      ret[0]);
+          }
+        // \partial_t v
+        if (iv == 0)
+          {
+            tw[1].scatter_matrix_to(variable_indices, variable_indices, ret[1]);
+            for (int i = 2; i < 4; ++i)
+              tw[i].scatter_matrix_to(variable_indices, {0}, ret[i]);
+          }
+        if (iv == 1 && type == TimeStepType::CGP)
+          tw[2].scatter_matrix_to(variable_indices, {0}, ret[2]);
+      }
+    return ret;
+  }
+
+  template <typename Number>
+  inline void
+  swap(MutableBlockVectorSliceT<Number> &slice, BlockVectorT<Number> &vec)
+  {
+    AssertDimension(slice.size(), vec.n_blocks());
+    for (unsigned int i = 0; i < slice.size(); ++i)
+      slice[i].get().swap(vec.block(i));
+  }
+
+  template <typename Number>
+  inline void
+  swap(BlockVectorT<Number> &vec, MutableBlockVectorSliceT<Number> &slice)
+  { // syntactic sugar for swapping back and forth
+    swap(slice, vec);
+  }
+
+  template <typename Number>
+  void
+  equ(BlockVectorT<Number> &blk, BlockVectorSliceT<Number> const &slice)
+  {
+    AssertDimension(slice.size(), blk.n_blocks());
+    for (unsigned int i = 0; i < slice.size(); ++i)
+      blk.block(i).equ(1.0, slice[i].get());
+  }
+  template <typename Number>
+  void
+  equ(BlockVectorT<Number> &blk, MutableBlockVectorSliceT<Number> const &slice)
+  {
+    AssertDimension(slice.size(), blk.n_blocks());
+    for (unsigned int i = 0; i < slice.size(); ++i)
+      blk.block(i).equ(1.0, slice[i].get());
+  }
 } // namespace dealii
