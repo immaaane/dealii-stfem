@@ -132,6 +132,30 @@ namespace dealii
     return c;
   }
 
+  template <typename T, typename = void>
+  struct HasLocallyOwnedDomainIndices : std::false_type
+  {};
+
+  template <typename T>
+  struct HasLocallyOwnedDomainIndices<
+    T,
+    std::void_t<decltype(std::declval<T>().locally_owned_domain_indices())>>
+    : std::true_type
+  {};
+
+  template <typename T, typename VectorType, typename = void>
+  struct HasInitializeDofVector : std::false_type
+  {};
+
+  template <typename T, typename VectorType>
+  struct HasInitializeDofVector<
+    T,
+    VectorType,
+    std::void_t<decltype(std::declval<T>().initialize_dof_vector(
+      std::declval<VectorType &>()))>> : std::true_type
+  {};
+  using dealii::internal::AffineConstraints::IsBlockMatrix;
+
   template <int dim,
             typename Number,
             typename SystemMatrixTypeK,
@@ -198,9 +222,58 @@ namespace dealii
     }
 
     virtual std::shared_ptr<DiagonalMatrix<BlockVectorType>>
-    get_matrix_diagonal() const = 0;
+    get_matrix_diagonal() const
+    {
+      DEAL_II_NOT_IMPLEMENTED();
+    }
     virtual std::shared_ptr<DiagonalMatrix<BlockVectorType>>
-    get_matrix_diagonal_inverse() const = 0;
+    get_matrix_diagonal_inverse() const
+    {
+      DEAL_II_NOT_IMPLEMENTED();
+    }
+
+    template <typename Number2>
+    void
+    initialize_spatial_dof_vector(VectorT<Number2> &dst) const
+    {
+      if constexpr (HasLocallyOwnedDomainIndices<SystemMatrixTypeK>::value)
+        dst.reinit(K.locally_owned_domain_indices());
+      else if constexpr (HasInitializeDofVector<SystemMatrixTypeK,
+                                                VectorType>::value)
+        K.initialize_dof_vector(dst);
+      else
+        DEAL_II_NOT_IMPLEMENTED();
+    }
+
+    template <typename Number2>
+    void
+    initialize_spatial_dof_vector(VectorT<Number2> &dst, unsigned int v) const
+    {
+      Assert(v <= blk_slice.n_variables() - 1,
+             ExcLowerRange(v, blk_slice.n_variables()));
+      if constexpr (IsBlockMatrix<SystemMatrixTypeK>::value)
+        dst.reinit(K.block(0, v).locally_owned_domain_indices(),
+                   K.block(0, v).get_mpi_communicator());
+      else if constexpr (HasInitializeDofVector<SystemMatrixTypeK,
+                                                BlockVectorType>::value)
+        K.initialize_dof_vector(dst, v);
+      else
+        DEAL_II_NOT_IMPLEMENTED();
+    }
+
+    template <typename Number2>
+    void
+    initialize_spatial_dof_vector(BlockVectorT<Number2> &dst) const
+    {
+      if constexpr (IsBlockMatrix<SystemMatrixTypeK>::value)
+        for (unsigned int i = 0; i < K.n_block_cols(); ++i)
+          initialize_spatial_dof_vector(dst.block(i), i);
+      else if constexpr (HasInitializeDofVector<SystemMatrixTypeK,
+                                                BlockVectorType>::value)
+        K.initialize_dof_vector(dst);
+      else
+        DEAL_II_NOT_IMPLEMENTED();
+    }
 
   protected:
     TimerOutput              &timer;
@@ -245,7 +318,7 @@ namespace dealii
       AssertDimension(this->Alpha.m(), n_blocks);
       dst = 0.0;
       VectorType tmp;
-      this->K.initialize_dof_vector(tmp);
+      this->initialize_spatial_dof_vector(tmp);
       for (unsigned int i = 0; i < n_blocks; ++i)
         {
           this->K.vmult(tmp, src.block(i));
@@ -270,7 +343,7 @@ namespace dealii
 
       dst = 0.0;
       VectorType tmp;
-      this->K.initialize_dof_vector(tmp);
+      this->initialize_spatial_dof_vector(tmp);
       for (unsigned int i = 0; i < n_blocks; ++i)
         {
           this->K.vmult(tmp, src.block(i));
@@ -295,7 +368,7 @@ namespace dealii
       const unsigned int n_blocks = dst.n_blocks();
 
       VectorType tmp;
-      this->K.initialize_dof_vector(tmp);
+      this->initialize_spatial_dof_vector(tmp);
       if (!this->alpha_is_zero)
         {
           this->K.vmult(tmp, src.block(0));
@@ -352,7 +425,7 @@ namespace dealii
     void
     initialize_dof_vector(VectorT<Number2> &vec, unsigned int = 1) const
     {
-      this->K.initialize_dof_vector(vec);
+      this->initialize_spatial_dof_vector(vec);
     }
 
     template <typename Number2>
@@ -361,7 +434,7 @@ namespace dealii
     {
       vec.reinit(this->Alpha.m());
       for (unsigned int i = 0; i < vec.n_blocks(); ++i)
-        this->initialize_dof_vector(vec.block(i));
+        this->initialize_spatial_dof_vector(vec.block(i));
     }
   };
 
@@ -401,7 +474,7 @@ namespace dealii
       AssertDimension(this->Alpha.m(), src.n_blocks());
       dst = 0.0;
       BlockVectorType tmp(2);
-      this->K.initialize_dof_vector(tmp);
+      this->initialize_spatial_dof_vector(tmp);
       BlockVectorType tmp_src(tmp.n_blocks());
       auto const     &n_timesteps_at_once = blk_slice.n_timesteps_at_once();
       for (unsigned int it = 0; it < n_timesteps_at_once; ++it)
@@ -438,7 +511,7 @@ namespace dealii
       AssertDimension(this->Alpha.m(), src.n_blocks());
       dst = 0.0;
       BlockVectorType tmp(2);
-      this->K.initialize_dof_vector(tmp);
+      this->initialize_spatial_dof_vector(tmp);
       BlockVectorType tmp_src(tmp.n_blocks());
 
       auto const &n_timesteps_at_once = blk_slice.n_timesteps_at_once();
@@ -478,7 +551,7 @@ namespace dealii
       AssertDimension(src.n_blocks(), blk_slice.n_variables());
 
       BlockVectorType tmp(2);
-      this->K.initialize_dof_vector(tmp);
+      this->initialize_spatial_dof_vector(tmp);
 
       for (unsigned int it = 0; it < blk_slice.n_timesteps_at_once(); ++it)
         for (unsigned int id = 0; id < blk_slice.n_timedofs(); ++id)
@@ -517,7 +590,7 @@ namespace dealii
     void
     initialize_dof_vector(VectorT<Number2> &vec, unsigned int variable) const
     {
-      this->K.initialize_dof_vector(vec, variable);
+      this->initialize_spatial_dof_vector(vec, variable);
     }
 
     template <typename Number2>

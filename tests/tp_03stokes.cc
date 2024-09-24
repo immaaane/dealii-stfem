@@ -25,6 +25,7 @@
 #include "include/time_integrators.h"
 
 // #define CHECK_COMPUTE_SYSTEM_MATRIX
+// #define MATRIX_BASED
 
 using namespace dealii;
 using dealii::numbers::PI;
@@ -202,7 +203,6 @@ test(dealii::ConditionalOStream &pcout,
     TimerOutput timer(pcout,
                       TimerOutput::never,
                       TimerOutput::cpu_and_wall_times);
-
     using SystemN = SystemMatrixStokes<dim,
                                        Number,
                                        StokesMatrixFreeOperator<dim, Number>,
@@ -212,6 +212,11 @@ test(dealii::ConditionalOStream &pcout,
                          NumberPreconditioner,
                          StokesMatrixFreeOperator<dim, NumberPreconditioner>,
                          MatrixFreeOperatorVector<dim, NumberPreconditioner>>;
+#ifdef MATRIX_BASED
+    using SystemN_M =
+      SystemMatrixStokes<dim, Number, BlockSparseMatrixType, SparseMatrixType>;
+    using SystemNP_M = SystemN_M;
+#endif
     std::unique_ptr<SystemN> rhs_matrix, matrix;
 
     FullMatrix<Number> const zero(Gamma.m(), Gamma.n());
@@ -225,6 +230,35 @@ test(dealii::ConditionalOStream &pcout,
     rhs_matrix = std::make_unique<SystemN>(
       timer, Stokes_mf, M_mf, rhs_uK, rhs_uM, blk_slice);
 
+#ifdef MATRIX_BASED
+    auto sparsity_pattern =
+      stokes::get_sparsity_pattern(dof_handler_u,
+                                   dof_handler_p,
+                                   locally_relevant_dofs_u,
+                                   locally_relevant_dofs_p,
+                                   constraints_u,
+                                   constraints_p);
+
+    auto stokes_matrix = std::make_shared<BlockSparseMatrixType>();
+    auto M             = std::make_shared<BlockSparseMatrixType>();
+
+    stokes_matrix->reinit(*sparsity_pattern);
+    Stokes_mf.compute_system_matrix(
+      *stokes_matrix,
+      std::vector<const dealii::AffineConstraints<Number> *>{&constraints_u,
+                                                             &constraints_p});
+
+    M->reinit(sparsity_pattern->n_block_rows(),
+              sparsity_pattern->n_block_cols());
+    M->block(0, 0).reinit(sparsity_pattern->block(0, 0));
+    M_mf.compute_system_matrix(M->block(0, 0), &constraints_u);
+
+    std::unique_ptr<SystemN_M> rhs_matrix_m, matrix_m;
+    matrix_m = std::make_unique<SystemN_M>(
+      timer, *stokes_matrix, M->block(0, 0), lhs_uK, lhs_uM, blk_slice);
+    rhs_matrix_m = std::make_unique<SystemN_M>(
+      timer, *stokes_matrix, M->block(0, 0), rhs_uK, rhs_uM, blk_slice);
+#endif
     /// GMG
     RepartitioningPolicyTools::DefaultPolicy<dim>          policy(true);
     std::vector<std::shared_ptr<const Triangulation<dim>>> mg_triangulations =
@@ -279,9 +313,17 @@ test(dealii::ConditionalOStream &pcout,
     MGLevelObject<
       std::vector<const dealii::AffineConstraints<NumberPreconditioner> *>>
       mg_constraints(min_level, max_level);
-
+#ifdef MATRIX_BASED
+    MGLevelObject<std::shared_ptr<const SystemNP_M>> mg_operators(min_level,
+                                                                  max_level);
+    MGLevelObject<std::shared_ptr<const BlockSparseMatrixType>>
+      mg_stokes_operators(min_level, max_level);
+    MGLevelObject<std::shared_ptr<const BlockSparseMatrixType>>
+      mg_mass_operators(min_level, max_level);
+#else
     MGLevelObject<std::shared_ptr<const SystemNP>> mg_operators(min_level,
                                                                 max_level);
+#endif
     MGLevelObject<std::shared_ptr<PreconditionVanka<NumberPreconditioner>>>
       precondition_vanka(min_level, max_level);
     std::vector<std::array<FullMatrix<NumberPreconditioner>, 4>> fetw;
@@ -375,58 +417,22 @@ test(dealii::ConditionalOStream &pcout,
         auto const &lhs_uK_p = fetw[l][0];
         auto const &lhs_uM_p = fetw[l][1];
 
-        mg_operators[l] = std::make_shared<SystemNP>(
-          timer, *Stokes_mf_, *M_mf_, lhs_uK_p, lhs_uM_p, blk_indices[i]);
-
-        auto sparsity_pattern = std::make_shared<BlockSparsityPatternType>();
-        auto Stokes           = std::make_shared<BlockSparseMatrixType>();
-        auto M                = std::make_shared<BlockSparseMatrixType>();
-
+        auto Stokes = std::make_shared<BlockSparseMatrixType>();
+        auto M      = std::make_shared<BlockSparseMatrixType>();
         AffineConstraints<NumberPreconditioner> empty_constraints_p(
           dof_handler_p_->locally_owned_dofs(), locally_relevant_dofs_p_);
         AffineConstraints<NumberPreconditioner> empty_constraints_u(
           dof_handler_u_->locally_owned_dofs(), locally_relevant_dofs_u_);
         empty_constraints_u.close();
         empty_constraints_p.close();
-        // create sparsity pattern
-        {
-          std::vector<IndexSet> row_partitioning{
-            dof_handler_u_->locally_owned_dofs(),
-            dof_handler_p_->locally_owned_dofs()};
-          std::vector<IndexSet> column_partitioning{
-            dof_handler_u_->locally_owned_dofs(),
-            dof_handler_p_->locally_owned_dofs()};
-          std::vector<IndexSet> writeable_rows{locally_relevant_dofs_u_,
-                                               locally_relevant_dofs_p_};
-          auto const subdomain = dealii::Utilities::MPI::this_mpi_process(
-            dof_handler_u.get_communicator());
-          sparsity_pattern->reinit(row_partitioning,
-                                   column_partitioning,
-                                   writeable_rows,
-                                   dof_handler_u.get_communicator());
-          make_block_sparsity_pattern_block(*dof_handler_u_,
-                                            *dof_handler_u_,
-                                            sparsity_pattern->block(0, 0),
-                                            empty_constraints_u,
-                                            empty_constraints_u,
-                                            true,
-                                            subdomain);
-          make_block_sparsity_pattern_block(*dof_handler_u_,
-                                            *dof_handler_p_,
-                                            sparsity_pattern->block(0, 1),
-                                            empty_constraints_u,
-                                            empty_constraints_p,
-                                            true,
-                                            subdomain);
-          make_block_sparsity_pattern_block(*dof_handler_p_,
-                                            *dof_handler_u_,
-                                            sparsity_pattern->block(1, 0),
-                                            empty_constraints_p,
-                                            empty_constraints_u,
-                                            true,
-                                            subdomain);
-          sparsity_pattern->compress();
-        }
+        auto sparsity_pattern =
+          stokes::get_sparsity_pattern(*dof_handler_u_,
+                                       *dof_handler_p_,
+                                       locally_relevant_dofs_u_,
+                                       locally_relevant_dofs_p_,
+                                       empty_constraints_u,
+                                       empty_constraints_p);
+
         // create Stokes matrix
         Stokes->reinit(*sparsity_pattern);
         Stokes_mf_->compute_system_matrix(
@@ -438,7 +444,6 @@ test(dealii::ConditionalOStream &pcout,
                   sparsity_pattern->n_block_cols());
         M->block(0, 0).reinit(sparsity_pattern->block(0, 0));
         M_mf_->compute_system_matrix(M->block(0, 0), &empty_constraints_u);
-
 #ifdef CHECK_COMPUTE_SYSTEM_MATRIX
         if constexpr (std::is_same_v<double, NumberPreconditioner>)
           {
@@ -473,7 +478,6 @@ test(dealii::ConditionalOStream &pcout,
               }
           }
 #endif
-        // matrix->attach(*mg_operators[l]);
         mg_M_mf[l]      = M_mf_;
         mg_Stokes_mf[l] = Stokes_mf_;
         precondition_vanka[l] =
@@ -488,6 +492,19 @@ test(dealii::ConditionalOStream &pcout,
             blk_indices[i],
             K_mask,
             M_mask);
+#ifdef MATRIX_BASED
+        *Stokes = 0;
+        Stokes_mf_->compute_system_matrix(*Stokes, mg_constraints[l]);
+        *M = 0;
+        M_mf_->compute_system_matrix(M->block(0, 0), mg_constraints[l][0]);
+        mg_stokes_operators[l] = Stokes;
+        mg_mass_operators[l]   = M;
+        mg_operators[l]        = std::make_shared<SystemNP_M>(
+          timer, *Stokes, M->block(0, 0), lhs_uK_p, lhs_uM_p, blk_indices[i]);
+#else
+        mg_operators[l] = std::make_shared<SystemNP>(
+          timer, *Stokes_mf_, *M_mf_, lhs_uK_p, lhs_uM_p, blk_indices[i]);
+#endif
       }
 
     std::unique_ptr<BlockVectorT<NumberPreconditioner>> tmp1, tmp2;
@@ -498,7 +515,11 @@ test(dealii::ConditionalOStream &pcout,
         matrix->initialize_dof_vector(*tmp1);
         matrix->initialize_dof_vector(*tmp2);
       }
+#ifdef MATRIX_BASED
+    using Preconditioner = GMG<dim, Number, SystemNP_M>;
+#else
     using Preconditioner = GMG<dim, NumberPreconditioner, SystemNP>;
+#endif
     std::unique_ptr<Preconditioner> preconditioner =
       std::make_unique<Preconditioner>(timer,
                                        parameters,
@@ -917,9 +938,9 @@ test(dealii::ConditionalOStream &pcout,
           }
         if (!parameters.nitsche_boundary)
           set_inhomogeneity(x, boundary_values);
-        x.update_ghost_values();
         if (stokes_parameters.mean_pressure)
           {
+            x.zero_out_ghost_values();
             auto p_tc = blk_slice.get_time(x, 1);
             for (auto &p : p_tc)
               {
@@ -934,7 +955,7 @@ test(dealii::ConditionalOStream &pcout,
                   p.get().add(-mean_pressure);
               }
           }
-
+        x.update_ghost_values();
 
         if (st_convergence)
           {
@@ -1111,7 +1132,11 @@ main(int argc, char **argv)
 
   auto tst = [&](std::string file_name) {
     if (precondition_float)
+#ifdef MATRIX_BASED
+      test<double, double>(pcout, comm, file_name, dim);
+#else
       test<double, float>(pcout, comm, file_name, dim);
+#endif
     else
       test<double, double>(pcout, comm, file_name, dim);
   };

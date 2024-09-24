@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "compute_block_matrix.h"
+
 namespace stokes
 {
   using namespace dealii;
@@ -102,4 +104,65 @@ namespace stokes
   private:
     double u_max;
   };
+
+  template <int dim, typename Number>
+  auto
+  get_sparsity_pattern(const dealii::DoFHandler<dim> &dof_handler_u_,
+                       const dealii::DoFHandler<dim> &dof_handler_p_,
+                       const dealii::IndexSet        &locally_relevant_dofs_u_,
+                       const dealii::IndexSet        &locally_relevant_dofs_p_,
+                       const AffineConstraints<Number> &constraints_u,
+                       const AffineConstraints<Number> &constraints_p)
+  {
+    auto sparsity_pattern = std::make_shared<BlockSparsityPatternType>();
+    // Set up the row and column partitioning for the block system
+    std::vector<dealii::IndexSet> row_partitioning{
+      dof_handler_u_.locally_owned_dofs(), dof_handler_p_.locally_owned_dofs()};
+
+    std::vector<dealii::IndexSet> column_partitioning{
+      dof_handler_u_.locally_owned_dofs(), dof_handler_p_.locally_owned_dofs()};
+
+    // Define the writable rows (locally relevant degrees of freedom)
+    std::vector<dealii::IndexSet> writeable_rows{locally_relevant_dofs_u_,
+                                                 locally_relevant_dofs_p_};
+
+    // Get the MPI subdomain
+    auto const subdomain = dealii::Utilities::MPI::this_mpi_process(
+      dof_handler_u_.get_communicator());
+
+    // Reinitialize the sparsity pattern
+    sparsity_pattern->reinit(row_partitioning,
+                             column_partitioning,
+                             writeable_rows,
+                             dof_handler_u_.get_communicator());
+
+    // Create the block sparsity pattern for each block
+    make_block_sparsity_pattern_block(dof_handler_u_,
+                                      dof_handler_u_,
+                                      sparsity_pattern->block(0, 0),
+                                      constraints_u,
+                                      constraints_u,
+                                      true,
+                                      subdomain);
+
+    make_block_sparsity_pattern_block(dof_handler_u_,
+                                      dof_handler_p_,
+                                      sparsity_pattern->block(0, 1),
+                                      constraints_u,
+                                      constraints_p,
+                                      true,
+                                      subdomain);
+
+    make_block_sparsity_pattern_block(dof_handler_p_,
+                                      dof_handler_u_,
+                                      sparsity_pattern->block(1, 0),
+                                      constraints_p,
+                                      constraints_u,
+                                      true,
+                                      subdomain);
+    // Compress the sparsity pattern
+    sparsity_pattern->compress();
+    return sparsity_pattern;
+  }
+
 } // namespace stokes
