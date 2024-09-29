@@ -1,6 +1,7 @@
 {
     "doOutput"               : "false",
     "printTiming"            : "false",
+    "colorizeBoundary"       : "false",
     "spaceTimeMg"            : "true",
     "mgTimeBeforeSpace"      : "false",
     "timeType"               : "CGP",
@@ -9,9 +10,13 @@
     "nTimestepsAtOnce"       : "1",
     "feDegree"               : "1",
     "feDegreeMin"            : "1",
-    "coarseGridSmootherType" : "Solver",
+    "feDegreeMinSpace"       : "1",
+    "relativeTolerance"      : "1e-12",
+    "relaxation"             : "0.0",
+    "usePMg"                 : "true",
     "coarseningType"         : "space_and_time",
-    "nDegCycles"             : "3",
+    "spaceTimeLevelFirst"    : "false",
+    "nDegCycles"             : "4",
     "nRefCycles"             : "4",
     "frequency"              : "1.0",
     "extrapolate"            : "true",
@@ -19,5 +24,6 @@
     "smoothingSteps"         : "1",
     "smoothingRange"         : "5.0",
     "coarseGridMaxiter"      : "10",
+    "pMgType"                : "bisect",
     "additionalFile"         : "tests/json/stokes.json"
 }

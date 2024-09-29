@@ -60,6 +60,7 @@ namespace dealii
         &transfer_)
       : blk_index(blk_index_)
     {
+      AssertDimension(transfer_.size(), blk_index_.n_variables());
       transfer.reserve(transfer_.size());
       for (unsigned int v = 0; v < transfer_.size(); ++v)
         transfer.emplace_back(
@@ -128,20 +129,20 @@ namespace dealii
 
   public:
     MGTwoLevelTransferTime() = default;
-    MGTwoLevelTransferTime(BlockSlice const  &blk_index,
+    MGTwoLevelTransferTime(BlockSlice const  &blk_index_hi_,
+                           BlockSlice const  &blk_index_lo_,
                            TimeStepType const type,
                            const bool         restrict_is_transpose_prolongate,
-                           TimeMGType         mg_type)
-      : blk_index_hi(blk_index)
-      , blk_index_lo(mg_type == TimeMGType::tau ?
-                       blk_index.n_timesteps_at_once() / 2 :
-                       blk_index.n_timesteps_at_once(),
-                     blk_index.n_variables(),
-                     mg_type == TimeMGType::k ? blk_index.n_timedofs() - 1 :
-                                                blk_index.n_timedofs())
+                           MGType             mg_type)
+      : blk_index_hi(blk_index_hi_)
+      , blk_index_lo(blk_index_lo_)
     {
-      bool k_mg   = mg_type == TimeMGType::k;
-      bool tau_mg = mg_type == TimeMGType::tau;
+      Assert((blk_index_hi.n_timedofs() == blk_index_lo.n_timedofs()) !=
+               (blk_index_hi.n_timesteps_at_once() ==
+                blk_index_lo.n_timesteps_at_once()),
+             ExcInternalError());
+      bool k_mg   = mg_type == MGType::k;
+      bool tau_mg = mg_type == MGType::tau;
 
       unsigned int r                   = (type == TimeStepType::DG) ?
                                            blk_index_hi.n_timedofs() - 1 :
@@ -406,7 +407,7 @@ namespace dealii
                   unsigned int                     n_timesteps_at_once,
                   unsigned int                     n_variables,
                   unsigned int                     n_levels,
-                  const std::vector<TimeMGType>   &mg_type_level,
+                  const std::vector<MGType>       &mg_type_level,
                   std::vector<unsigned int> const &poly_time_sequence)
   {
     AssertDimension(n_levels - 1, mg_type_level.size());
@@ -415,9 +416,9 @@ namespace dealii
 #ifdef DEBUG
     unsigned int n_k_levels = 0, n_tau_levels = 0;
     for (auto const &el : mg_type_level)
-      if (el == TimeMGType::k)
+      if (el == MGType::k)
         ++n_k_levels;
-      else if (el == TimeMGType::tau)
+      else if (el == MGType::tau)
         ++n_tau_levels;
 
     Assert((type == TimeStepType::DG ? *p_mg + 1 : *p_mg >= n_k_levels),
@@ -432,11 +433,12 @@ namespace dealii
           (type == TimeStepType::DG) ? *p_mg + 1 : *p_mg;
         blk_indices[i] =
           BlockSlice(n_timesteps_at_once, n_variables, n_dofs_intvl);
-        if (*mgt == TimeMGType::k)
+        if (*mgt == MGType::k)
           ++p_mg;
-        else if (*mgt == TimeMGType::tau)
+        else if (*mgt == MGType::tau)
           n_timesteps_at_once /= 2;
       }
+    Assert(p_mg == poly_time_sequence.rend() - 1, ExcInternalError());
     blk_indices[0] = BlockSlice(n_timesteps_at_once,
                                 n_variables,
                                 (type == TimeStepType::DG) ? *p_mg + 1 : *p_mg);
@@ -455,7 +457,7 @@ namespace dealii
                              VectorT<Number> &,
                              const unsigned int)> &initialize_dof_vector,
     const bool                     restrict_is_transpose_prolongate,
-    const std::vector<TimeMGType> &mg_type_level,
+    const std::vector<MGType>     &mg_type_level,
     const std::vector<BlockSlice> &blk_indices)
   {
     unsigned int const min_level = mg_dof_handlers.min_level();
@@ -489,7 +491,7 @@ namespace dealii
                              VectorT<Number> &,
                              const unsigned int)> &initialize_dof_vector,
     const bool                     restrict_is_transpose_prolongate,
-    const std::vector<TimeMGType> &mg_type_level,
+    const std::vector<MGType>     &mg_type_level,
     const std::vector<BlockSlice> &blk_indices)
   {
     using BlockVectorType          = BlockVectorT<Number>;
@@ -530,7 +532,7 @@ namespace dealii
     for (auto mgt = mg_type_level.rbegin(); mgt != mg_type_level.rend();
          ++mgt, --i)
       {
-        if (*mgt == TimeMGType::none)
+        if (is_space_lvl(*mgt))
           {
             for (unsigned int v = 0; v < n_variables; ++v)
               {
@@ -549,8 +551,11 @@ namespace dealii
           }
         else
           transfer[i] = TwoLevelTransferOperator<dim, Number>(
-            MGTwoLevelTransferTime<Number>(
-              blk_indices[i], type, restrict_is_transpose_prolongate, *mgt));
+            MGTwoLevelTransferTime<Number>(blk_indices[i],
+                                           blk_indices[i - 1],
+                                           type,
+                                           restrict_is_transpose_prolongate,
+                                           *mgt));
       }
     return std::make_unique<STMGTransferBlockMatrixFree<dim, Number>>(
       space_transfers, transfer, blk_indices, partitioners);
@@ -632,11 +637,13 @@ namespace dealii
                 {
                   auto const &[jt, jv, jd] = blk_slice.decompose(j);
                   const auto &K            = K_blocks(iv, jv)[ii];
-                  const auto &M            = M_blocks(iv, jv)[ii];
                   if (Beta(i, j) != 0.0 && (M_mask.empty() || M_mask(iv, jv)))
-                    for (unsigned int k = 0; k < M.m(); ++k)
-                      for (unsigned int l = 0; l < M.n(); ++l)
-                        B(r_o + k, c_o + l) += Beta(i, j) * M(k, l);
+                    {
+                      const auto &M = M_blocks(iv, jv)[ii];
+                      for (unsigned int k = 0; k < M.m(); ++k)
+                        for (unsigned int l = 0; l < M.n(); ++l)
+                          B(r_o + k, c_o + l) += Beta(i, j) * M(k, l);
+                    }
                   if (Alpha(i, j) != 0.0 && (K_mask.empty() || K_mask(iv, jv)))
                     for (unsigned int k = 0; k < K.m(); ++k)
                       for (unsigned int l = 0; l < K.n(); ++l)
@@ -861,7 +868,7 @@ namespace dealii
     unsigned int smoothing_eig_cg_n_iterations = 20;
     unsigned int smoothing_steps               = 1;
 
-    bool estimate_relaxation = true;
+    double relaxation = 0.0;
 
     std::string coarse_grid_smoother_type = "Smoother";
 
@@ -882,7 +889,9 @@ namespace dealii
     TimeStepType type              = TimeStepType::CGP;
     ProblemType  problem           = ProblemType::wave;
 
-    CoarseningType coarsening_type = CoarseningType::space_or_time;
+    CoarseningType coarsening_type        = CoarseningType::space_or_time;
+    bool           space_time_level_first = true;
+    bool           use_pmg                = false;
     MGTransferGlobalCoarseningTools::PolynomialCoarseningSequenceType
       poly_coarsening = MGTransferGlobalCoarseningTools::
         PolynomialCoarseningSequenceType::decrease_by_one;
@@ -890,6 +899,7 @@ namespace dealii
     int          n_timesteps_at_once_min = -1;
     unsigned int fe_degree               = 1;
     int          fe_degree_min           = -1;
+    int          fe_degree_min_space     = -1;
     unsigned int n_deg_cycles            = 1;
     unsigned int n_ref_cycles            = 1;
     double       frequency               = 1.0;
@@ -928,10 +938,13 @@ namespace dealii
       prm.add_parameter("problemType", problem_);
       prm.add_parameter("pMgType", p_mg_);
       prm.add_parameter("coarseningType", c_type_);
+      prm.add_parameter("spaceTimeLevelFirst", space_time_level_first);
+      prm.add_parameter("usePMg", use_pmg);
       prm.add_parameter("nTimestepsAtOnce", n_timesteps_at_once);
       prm.add_parameter("nTimestepsAtOnceMin", n_timesteps_at_once_min);
       prm.add_parameter("feDegree", fe_degree);
       prm.add_parameter("feDegreeMin", fe_degree_min);
+      prm.add_parameter("feDegreeMinSpace", fe_degree_min_space);
       prm.add_parameter("nDegCycles", n_deg_cycles);
       prm.add_parameter("nRefCycles", n_ref_cycles);
       prm.add_parameter("frequency", frequency);
@@ -955,7 +968,7 @@ namespace dealii
       prm.add_parameter("smoothingDegree", mg_data.smoothing_degree);
       prm.add_parameter("smoothingSteps", mg_data.smoothing_steps);
       prm.add_parameter("smoothingRange", mg_data.smoothing_range);
-      prm.add_parameter("estimateRelaxation", mg_data.estimate_relaxation);
+      prm.add_parameter("relaxation", mg_data.relaxation);
       prm.add_parameter("coarseGridSmootherType",
                         mg_data.coarse_grid_smoother_type);
       prm.add_parameter("coarseGridMaxiter", mg_data.coarse_grid_maxiter);
@@ -988,6 +1001,8 @@ namespace dealii
         fe_degree_min = fe_degree - 1;
       fe_degree_min =
         std::clamp(fe_degree_min, lowest_degree, static_cast<int>(fe_degree));
+      if (fe_degree_min_space == -1)
+        fe_degree_min_space = fe_degree_min;
     }
   };
 
@@ -1013,7 +1028,7 @@ namespace dealii
       TimerOutput                                &timer,
       Parameters<dim> const                      &parameters,
       unsigned int const                          n_timesteps_at_once,
-      const std::vector<TimeMGType>              &mg_type_level,
+      const std::vector<MGType>                  &mg_type_level,
       std::vector<unsigned int> const            &poly_time_sequence,
       const std::vector<const DoFHandler<dim> *> &dof_handler,
       const MGLevelObject<std::vector<const DoFHandler<dim> *>>
@@ -1033,7 +1048,8 @@ namespace dealii
       , precondition_sequence(
           get_precondition_stmg_types(mg_sequence,
                                       parameters.coarsening_type,
-                                      parameters.time_before_space))
+                                      parameters.time_before_space,
+                                      parameters.space_time_level_first))
       , src_(std::move(tmp1))
       , dst_(std::move(tmp2))
       , dof_handler(dof_handler)
@@ -1068,7 +1084,7 @@ namespace dealii
       TimerOutput                     &timer,
       Parameters<dim> const           &parameters,
       unsigned int const               n_timesteps_at_once,
-      const std::vector<TimeMGType>   &mg_type_level,
+      const std::vector<MGType>       &mg_type_level,
       const std::vector<unsigned int> &poly_time_sequence,
       const DoFHandler<dim>           &dof_handler,
       const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>>
@@ -1088,7 +1104,8 @@ namespace dealii
       , precondition_sequence(
           get_precondition_stmg_types(mg_sequence,
                                       parameters.coarsening_type,
-                                      parameters.time_before_space))
+                                      parameters.time_before_space,
+                                      parameters.space_time_level_first))
       , src_(std::move(tmp1))
       , dst_(std::move(tmp2))
       , dof_handler(1, &dof_handler)
@@ -1143,7 +1160,7 @@ namespace dealii
                 smoother_data[level].template emplace<SmootherType::precon>();
               sd.preconditioner = precondition_vanka[level];
               sd.n_iterations   = additional_data.smoothing_steps;
-              sd.relaxation = additional_data.estimate_relaxation ? 0.0 : 1.0;
+              sd.relaxation     = additional_data.relaxation;
               sd.eigenvalue_algorithm =
                 internal::EigenvalueAlgorithm::power_iteration;
               sd.eig_cg_n_iterations =
@@ -1171,8 +1188,7 @@ namespace dealii
           gmres_coarse = std::make_unique<SolverGMRES<BlockVectorType>>(
             *solver_control_coarse, gmres_additional_data);
           typename CoarsePreconditionerType::AdditionalData coarse_precon_data;
-          coarse_precon_data.relaxation =
-            additional_data.estimate_relaxation ? 0.0 : 1.0;
+          coarse_precon_data.relaxation     = additional_data.relaxation;
           coarse_precon_data.n_iterations   = additional_data.smoothing_steps;
           coarse_precon_data.preconditioner = precondition_vanka[min_level];
           coarse_precon_data.eigenvalue_algorithm =
@@ -1248,7 +1264,7 @@ namespace dealii
     PreconditionerGMGAdditionalData additional_data;
     const unsigned int              min_level;
     const unsigned int              max_level;
-    std::vector<TimeMGType>         mg_sequence;
+    std::vector<MGType>             mg_sequence;
     std::vector<size_t>             precondition_sequence;
 
     std::unique_ptr<BlockVectorType> src_;

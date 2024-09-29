@@ -36,7 +36,16 @@ main(int argc, char **argv)
   parallel::distributed::Triangulation<2> tria(comm);
   dealii::GridGenerator::hyper_cube(tria);
   tria.refine_global(3);
-  FE_DGP<dim>     fe(1);
+  FE_DGP<dim> fe(3);
+  auto        poly_mg_sequence =
+    get_poly_mg_sequence(3,
+                         1,
+                         MGTransferGlobalCoarseningTools::
+                           PolynomialCoarseningSequenceType::decrease_by_one);
+  std::vector<std::vector<std::unique_ptr<FiniteElement<dim>>>> fe_pmg =
+    get_fe_pmg_sequence<dim>(poly_mg_sequence,
+                             {{1}},
+                             FE_DGP<dim>(poly_mg_sequence.back()));
   DoFHandler<dim> dof(tria);
   dof.distribute_dofs(fe);
 
@@ -62,8 +71,15 @@ main(int argc, char **argv)
   std::vector<std::shared_ptr<const Triangulation<dim>>> mg_triangulations =
     MGTransferGlobalCoarseningTools::create_geometric_coarsening_sequence(
       tria, policy);
+
+  BlockSlice          blk_slice(1, 1, 1);
+  std::vector<MGType> mg_type_level(mg_triangulations.size() - 1, MGType::h);
+  std::vector<MGType> mg_p_level(fe_pmg.size() - 1, MGType::p);
+  mg_type_level.insert(mg_type_level.end(),
+                       mg_p_level.begin(),
+                       mg_p_level.end());
   const unsigned int min_level = 0;
-  const unsigned int max_level = mg_triangulations.size() - 1;
+  const unsigned int max_level = mg_type_level.size();
   MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers(
     min_level, max_level);
 
@@ -71,16 +87,26 @@ main(int argc, char **argv)
     mg_M_mf(min_level, max_level);
 
   MGLevelObject<std::shared_ptr<const AffineConstraints<double>>>
-                          mg_constraints(min_level, max_level);
-  BlockSlice              blk_slice(1, 1, 1);
-  std::vector<TimeMGType> mg_type_level(mg_triangulations.size() - 1,
-                                        TimeMGType::none);
-  for (unsigned int l = min_level; l <= max_level; ++l)
+    mg_constraints(min_level, max_level);
+  for (auto mgt : mg_type_level)
+    std::cout << static_cast<char>(mgt) << ' ';
+  std::cout << std::endl;
+  auto fe_   = fe_pmg.begin();
+  auto tria_ = mg_triangulations.begin();
+  for (unsigned int l = min_level, i = 0; l <= max_level; ++l, ++i)
     {
-      auto dof_handler_ =
-        std::make_shared<DoFHandler<dim>>(*mg_triangulations[l]);
+      std::cout << "On level: " << l << std::endl;
+
+      auto dof_handler_ = std::make_shared<DoFHandler<dim>>(**tria_);
       auto constraints_ = std::make_shared<AffineConstraints<double>>();
-      dof_handler_->distribute_dofs(fe);
+
+      auto const &fe_dgp = *(*fe_)[0];
+      dof_handler_->distribute_dofs(fe_dgp);
+      if (i < mg_type_level.size() && mg_type_level[i] == MGType::p)
+        ++fe_;
+      if (i < mg_type_level.size() && mg_type_level[i] == MGType::h)
+        ++tria_;
+      std::cout << "Distributed dofs." << std::endl;
       IndexSet locally_relevant_dofs;
       DoFTools::extract_locally_relevant_dofs(*dof_handler_,
                                               locally_relevant_dofs);
@@ -124,7 +150,9 @@ main(int argc, char **argv)
         std::cout << std::endl;
       }
     }
-  std::vector<BlockSlice> blk_indices(mg_triangulations.size(), blk_slice);
+  Assert(fe_ == fe_pmg.end() - 1, ExcInternalError());
+  Assert(tria_ == mg_triangulations.end() - 1, ExcInternalError());
+  std::vector<BlockSlice> blk_indices(mg_dof_handlers.n_levels(), blk_slice);
   auto                    transfer_block = build_stmg_transfers<dim, double>(
     TimeStepType::DG,
     mg_dof_handlers,

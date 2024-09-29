@@ -177,18 +177,30 @@ test(dealii::ConditionalOStream &pcout,
     unsigned int n_timesteps_min =
       space_time_mg ? std::max(parameters.n_timesteps_at_once_min, 1) :
                       n_timesteps_at_once;
-    auto poly_time_sequence = get_poly_mg_sequence(fe_degree,
-                                                   fe_degree_min,
-                                                   parameters.poly_coarsening);
+    auto poly_mg_sequence_time =
+      get_poly_mg_sequence(fe_degree,
+                           fe_degree_min,
+                           parameters.poly_coarsening);
+    auto poly_mg_sequence_space =
+      get_poly_mg_sequence(fe_degree,
+                           parameters.fe_degree_min_space,
+                           parameters.poly_coarsening);
 
-    std::vector<TimeMGType> const mg_type_level =
-      get_time_mg_sequence(mg_triangulations.size(),
-                           poly_time_sequence,
-                           n_timesteps_at_once,
-                           n_timesteps_min,
-                           TimeMGType::k,
-                           parameters.coarsening_type,
-                           time_before_space);
+    std::vector<MGType> const mg_type_level =
+      get_mg_sequence(mg_triangulations.size(),
+                      poly_mg_sequence_time,
+                      poly_mg_sequence_space,
+                      n_timesteps_at_once,
+                      n_timesteps_min,
+                      MGType::tau,
+                      parameters.coarsening_type,
+                      time_before_space,
+                      parameters.use_pmg,
+                      parameters.space_time_level_first);
+    std::vector<std::vector<std::unique_ptr<FiniteElement<dim>>>> fe_pmg =
+      get_fe_pmg_sequence<dim>(poly_mg_sequence_space,
+                               {{1}},
+                               FE_Q<dim>(fe_degree + 1));
     mg_triangulations =
       get_space_time_triangulation(mg_type_level, mg_triangulations);
 
@@ -196,7 +208,10 @@ test(dealii::ConditionalOStream &pcout,
     const unsigned int min_level = 0;
     const unsigned int max_level = mg_triangulations.size() - 1;
     pcout << ":: Min Level " << min_level << "  Max Level " << max_level
-          << "\n";
+          << "\n:: Levels: ";
+    for (auto mgt : mg_type_level)
+      pcout << static_cast<char>(mgt) << ' ';
+    pcout << std::endl;
     MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers(
       min_level, max_level);
     MGLevelObject<std::shared_ptr<
@@ -219,22 +234,29 @@ test(dealii::ConditionalOStream &pcout,
                                                        time_step_size,
                                                        n_timesteps_at_once,
                                                        mg_type_level,
-                                                       poly_time_sequence);
+                                                       poly_mg_sequence_time);
     else if (parameters.problem == ProblemType::wave)
       fetw_w =
         get_fe_time_weights_wave<NumberPreconditioner>(parameters.type,
                                                        time_step_size,
                                                        n_timesteps_at_once,
                                                        mg_type_level,
-                                                       poly_time_sequence);
+                                                       poly_mg_sequence_time);
 
-    for (unsigned int l = min_level; l <= max_level; ++l)
+    Assert(fe_pmg.size() == poly_mg_sequence_space.size(), ExcInternalError());
+    auto fe_ = parameters.use_pmg ? fe_pmg.begin() : fe_pmg.end() - 1;
+    for (unsigned int l = min_level, i = 0; l <= max_level; ++l, ++i)
       {
         auto dof_handler_ =
           std::make_shared<DoFHandler<dim>>(*mg_triangulations[l]);
         auto constraints_ =
           std::make_shared<AffineConstraints<NumberPreconditioner>>();
-        dof_handler_->distribute_dofs(fe);
+        auto const &fe_pmg = *(*fe_)[0];
+        QGauss<dim> quad_pmg(fe_pmg.tensor_degree() + 1);
+        dof_handler_->distribute_dofs(fe_pmg);
+        if (parameters.use_pmg && i < mg_type_level.size() &&
+            mg_type_level[i] == MGType::p)
+          ++fe_;
 
         IndexSet locally_relevant_dofs;
         DoFTools::extract_locally_relevant_dofs(*dof_handler_,
@@ -248,10 +270,10 @@ test(dealii::ConditionalOStream &pcout,
         // matrix-free operators
         auto K_mf_ =
           std::make_shared<MatrixFreeOperatorScalar<dim, NumberPreconditioner>>(
-            mapping, *dof_handler_, *constraints_, quad, 0.0, 1.0);
+            mapping, *dof_handler_, *constraints_, quad_pmg, 0.0, 1.0);
         auto M_mf_ =
           std::make_shared<MatrixFreeOperatorScalar<dim, NumberPreconditioner>>(
-            mapping, *dof_handler_, *constraints_, quad, 1.0, 0.0);
+            mapping, *dof_handler_, *constraints_, quad_pmg, 1.0, 0.0);
         if (!parameters.space_time_conv_test)
           K_mf_->evaluate_coefficient(coeff);
 
@@ -298,6 +320,8 @@ test(dealii::ConditionalOStream &pcout,
 
 
 
+    if (parameters.use_pmg)
+      Assert(fe_ == fe_pmg.end() - 1, ExcInternalError());
     // std::shared_ptr<MGSmootherBase<BlockVectorType>> smoother =
     //   std::make_shared<MGSmootherIdentity<BlockVectorType>>();
     std::unique_ptr<BlockVectorT<NumberPreconditioner>> tmp1, tmp2;
@@ -309,18 +333,19 @@ test(dealii::ConditionalOStream &pcout,
         matrix->initialize_dof_vector(*tmp2);
       }
     using Preconditioner = GMG<dim, NumberPreconditioner, SystemNP>;
-    auto preconditioner  = std::make_unique<Preconditioner>(timer,
-                                                           parameters,
-                                                           n_timesteps_at_once,
-                                                           mg_type_level,
-                                                           poly_time_sequence,
-                                                           dof_handler,
-                                                           mg_dof_handlers,
-                                                           mg_constraints,
-                                                           mg_operators,
-                                                           precondition_vanka,
-                                                           std::move(tmp1),
-                                                           std::move(tmp2));
+    auto preconditioner =
+      std::make_unique<Preconditioner>(timer,
+                                       parameters,
+                                       n_timesteps_at_once,
+                                       mg_type_level,
+                                       poly_mg_sequence_time,
+                                       dof_handler,
+                                       mg_dof_handlers,
+                                       mg_constraints,
+                                       mg_operators,
+                                       precondition_vanka,
+                                       std::move(tmp1),
+                                       std::move(tmp2));
     preconditioner->reinit();
     //
     /// GMG

@@ -113,3 +113,35 @@ get_variable:  [PASS]
 [PASS] Test 5: Many space levels, some tau and k levels
 [PASS] Test 6: Test 5, but time before space
 [PASS] Test 6: Test 5, but time before space
+[PASS] Test 1: No space, lower level tau, then k
+[PASS] Test 1: No space, lower level tau, then k
+[PASS] Test 2: No space lower level k, then tau
+[PASS] Test 2: No space lower level k, then tau
+[PASS] Test 3: Interleaving of tau with space, then k
+[PASS] Test 3: Interleaving of tau with space, then k
+[PASS] Test 3a: Interleaving of tau with space, then k
+[PASS] Test 3a: Interleaving of tau with space, then k
+[PASS] Test 4: Equal number of k and space levels
+[PASS] Test 4: Equal number of k and space levels
+[PASS] Test 4a: Equal number of k and space levels
+[PASS] Test 4a: Equal number of k and space levels
+[PASS] Test 5: Many space levels, some tau and k levels
+[PASS] Test 5: Many space levels, some tau and k levels
+[PASS] Test 6: Test 5, but time before space
+[PASS] Test 6: Test 5, but time before space
+[PASS] Test 1: No space, lower level tau, then k
+[PASS] Test 1: No space, lower level tau, then k
+[PASS] Test 2: No space lower level k, then tau
+[PASS] Test 2: No space lower level k, then tau
+[PASS] Test 3: Interleaving of tau with space, then k
+[PASS] Test 3: Interleaving of tau with space, then k
+[PASS] Test 3a: Interleaving of tau with space, then k
+[PASS] Test 3a: Interleaving of tau with space, then k
+[PASS] Test 4: Equal number of k and space levels
+[PASS] Test 4: Equal number of k and space levels
+[PASS] Test 4a: Equal number of k and space levels
+[PASS] Test 4a: Equal number of k and space levels
+[PASS] Test 5: Many space levels, some tau and k levels
+[PASS] Test 5: Many space levels, some tau and k levels
+[PASS] Test 6: Test 5, but time before space
+[PASS] Test 6: Test 5, but time before space

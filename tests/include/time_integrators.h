@@ -44,16 +44,17 @@ namespace dealii
                                             integrate_rhs_function,
                    unsigned int             n_timesteps_at_once_,
                    bool                     extrapolate_,
-                   const NitscheIntegrator &nitsche_ = NitscheIntegrator())
+                   const NitscheIntegrator &nitsche_ = NitscheIntegrator(),
+                   double                   abstol   = 1.e-12)
       : type(type_)
       , time_degree(time_degree_)
       , quad_time(get_time_quad(type, time_degree))
       , Alpha(Alpha_)
       , Gamma(Gamma_)
-      , solver_control(200, 1.e-12, gmres_tolerance_, false, true)
+      , solver_control(200, abstol, gmres_tolerance_, false, true)
       , solver(solver_control,
                typename SolverFGMRES<
-                 BlockVectorType>::AdditionalData::AdditionalData(200))
+                 BlockVectorType>::AdditionalData::AdditionalData(100))
       , preconditioner(preconditioner_)
       , matrix(matrix_)
       , rhs_matrix(rhs_matrix_)
@@ -243,7 +244,8 @@ namespace dealii
                                integrate_rhs_function,
       unsigned int             n_timesteps_at_once_,
       bool                     extrapolate = true,
-      const NitscheIntegrator &nitsche     = NitscheIntegrator())
+      const NitscheIntegrator &nitsche     = NitscheIntegrator(),
+      double                   abstol      = 1.e-12)
       : TimeIntegrator<dim, Number, Preconditioner, System, NitscheIntegrator>(
           type_,
           time_degree_,
@@ -256,7 +258,8 @@ namespace dealii
           integrate_rhs_function,
           n_timesteps_at_once_,
           extrapolate,
-          nitsche)
+          nitsche,
+          abstol)
     {}
 
     void

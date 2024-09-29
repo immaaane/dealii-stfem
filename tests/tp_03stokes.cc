@@ -98,9 +98,10 @@ test(dealii::ConditionalOStream &pcout,
     setup_triangulation(tria, parameters);
     double spc_step = GridTools::minimal_cell_diameter(tria) / std::sqrt(dim);
 
-    double       time     = 0.;
-    double       time_len = parameters.end_time - time;
-    unsigned int n_steps  = static_cast<unsigned int>((time_len) / spc_step);
+    double step_    = GridTools::maximal_cell_diameter(tria) / std::sqrt(dim);
+    double time     = 0.;
+    double time_len = parameters.end_time - time;
+    unsigned int n_steps  = static_cast<unsigned int>((time_len) / step_);
     double time_step_size = time_len * pow(2.0, -(refinement + 1)) / n_steps;
 
     double viscosity = stokes_parameters.viscosity;
@@ -176,16 +177,16 @@ test(dealii::ConditionalOStream &pcout,
                                                     stokes_parameters.penalty1,
                                                     stokes_parameters.penalty2);
     using Nitsche = StokesNitscheMatrixFreeOperator<dim, Number>;
-    std::unique_ptr<Nitsche> Stokes_nitsche_mf;
-    if (parameters.nitsche_boundary)
-      Stokes_nitsche_mf = std::make_unique<Nitsche>(mapping,
-                                                    dof_handlers,
-                                                    constraints,
-                                                    quads_u,
-                                                    viscosity,
-                                                    spc_step,
-                                                    stokes_parameters.penalty1,
-                                                    stokes_parameters.penalty2);
+    std::unique_ptr<Nitsche> Stokes_nitsche_mf =
+      std::make_unique<Nitsche>(mapping,
+                                dof_handlers,
+                                constraints,
+                                quads_u,
+                                viscosity,
+                                spc_step,
+                                stokes_parameters.penalty1,
+                                stokes_parameters.penalty2);
+
     MatrixFreeOperatorVector<dim, Number> M_mf(
       mapping, dof_handler_u, constraints_u, quad_u, 1.0, 0.0);
 
@@ -262,26 +263,48 @@ test(dealii::ConditionalOStream &pcout,
     /// GMG
     RepartitioningPolicyTools::DefaultPolicy<dim>          policy(true);
     std::vector<std::shared_ptr<const Triangulation<dim>>> mg_triangulations =
-      MGTransferGlobalCoarseningTools::create_geometric_coarsening_sequence(
-        tria // , policy
-      );
+      parameters.grid_descriptor != "hyperRectangle" ?
+        MGTransferGlobalCoarseningTools::create_geometric_coarsening_sequence(
+          tria) :
+        MGTransferGlobalCoarseningTools::create_geometric_coarsening_sequence(
+          tria, policy);
     unsigned int fe_degree_min =
       space_time_mg ? parameters.fe_degree_min : fe_degree;
     unsigned int n_timesteps_min =
       space_time_mg ? std::max(parameters.n_timesteps_at_once_min, 1) :
                       n_timesteps_at_once;
-    auto poly_time_sequence = get_poly_mg_sequence(fe_degree,
-                                                   fe_degree_min,
-                                                   parameters.poly_coarsening);
+    auto poly_mg_sequence_time =
+      get_poly_mg_sequence(fe_degree,
+                           fe_degree_min,
+                           parameters.poly_coarsening);
+    auto poly_mg_sequence_space =
+      get_poly_mg_sequence(fe_degree,
+                           parameters.fe_degree_min_space,
+                           parameters.poly_coarsening);
 
-    std::vector<TimeMGType> mg_type_level =
-      get_time_mg_sequence(mg_triangulations.size(),
-                           poly_time_sequence,
-                           n_timesteps_at_once,
-                           n_timesteps_min,
-                           TimeMGType::k,
-                           parameters.coarsening_type,
-                           time_before_space);
+    std::vector<MGType> mg_type_level =
+      get_mg_sequence(mg_triangulations.size(),
+                      poly_mg_sequence_time,
+                      poly_mg_sequence_space,
+                      n_timesteps_at_once,
+                      n_timesteps_min,
+                      MGType::tau,
+                      parameters.coarsening_type,
+                      time_before_space,
+                      parameters.use_pmg,
+                      parameters.space_time_level_first);
+    std::vector<std::vector<std::unique_ptr<FiniteElement<dim>>>> fe_pmg;
+    if (stokes_parameters.dg_pressure)
+      fe_pmg = get_fe_pmg_sequence<dim>(poly_mg_sequence_space,
+                                        {{dim, 1}},
+                                        FE_Q<dim>(fe_degree + 1),
+                                        FE_DGP<dim>(fe_degree));
+    else
+      fe_pmg = get_fe_pmg_sequence<dim>(poly_mg_sequence_space,
+                                        {{dim, 1}},
+                                        FE_Q<dim>(fe_degree + 1),
+                                        FE_Q<dim>(fe_degree));
+
     mg_triangulations =
       get_space_time_triangulation(mg_type_level, mg_triangulations);
 
@@ -289,7 +312,19 @@ test(dealii::ConditionalOStream &pcout,
     const unsigned int min_level = 0;
     const unsigned int max_level = mg_triangulations.size() - 1;
     pcout << ":: Min Level " << min_level << "  Max Level " << max_level
-          << "\n";
+          << "\n:: Levels:  ";
+    for (auto mgt : mg_type_level)
+      pcout << static_cast<char>(mgt) << ' ';
+    pcout << "\n:: Precon: ";
+    auto p_seq = get_precondition_stmg_types(mg_type_level,
+                                             parameters.coarsening_type,
+                                             parameters.time_before_space,
+                                             parameters.space_time_level_first);
+    for (auto mgt : p_seq)
+      pcout << mgt << ' ';
+    pcout << std::endl;
+
+
     MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers_u(
       min_level, max_level);
     MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers_p(
@@ -332,7 +367,7 @@ test(dealii::ConditionalOStream &pcout,
       time_step_size,
       n_timesteps_at_once,
       mg_type_level,
-      poly_time_sequence,
+      poly_mg_sequence_time,
       get_fe_time_weights_stokes<NumberPreconditioner>);
     Table<2, bool> K_mask;
     Table<2, bool> M_mask(2, 2);
@@ -341,13 +376,16 @@ test(dealii::ConditionalOStream &pcout,
     unsigned int const n_levels    = mg_dof_handlers.n_levels();
     unsigned int const n_variables = dof_handlers.size();
 
-    std::vector<BlockSlice> blk_indices = get_blk_indices(parameters.type,
-                                                          n_timesteps_at_once,
-                                                          n_variables,
-                                                          n_levels,
-                                                          mg_type_level,
-                                                          poly_time_sequence);
+    std::vector<BlockSlice> blk_indices =
+      get_blk_indices(parameters.type,
+                      n_timesteps_at_once,
+                      n_variables,
+                      n_levels,
+                      mg_type_level,
+                      poly_mg_sequence_time);
 
+    Assert(fe_pmg.size() == poly_mg_sequence_space.size(), ExcInternalError());
+    auto fe_ = parameters.use_pmg ? fe_pmg.begin() : fe_pmg.end() - 1;
     for (unsigned int l = min_level, i = 0; l <= max_level; ++l, ++i)
       {
         auto dof_handler_p_ =
@@ -359,9 +397,18 @@ test(dealii::ConditionalOStream &pcout,
           std::make_shared<AffineConstraints<NumberPreconditioner>>();
         auto constraints_u_ =
           std::make_shared<AffineConstraints<NumberPreconditioner>>();
+        Assert(fe_->size() == 2, ExcInternalError());
+        auto const &fe_p_ = *(*fe_)[1];
+        auto const &fe_u_ = *(*fe_)[0];
+        AssertDimension(fe_u_.tensor_degree() - 1, fe_p_.tensor_degree());
+        QGauss<dim>                  quad_u_(fe_u_.tensor_degree() + 1);
+        std::vector<Quadrature<dim>> quads_u_{quad_u_, quad_u_};
+        dof_handler_p_->distribute_dofs(fe_p_);
+        dof_handler_u_->distribute_dofs(fe_u_);
 
-        dof_handler_p_->distribute_dofs(*fe_p);
-        dof_handler_u_->distribute_dofs(fe_u);
+        if (parameters.use_pmg && i < mg_type_level.size() &&
+            mg_type_level[i] == MGType::p)
+          ++fe_;
         IndexSet locally_relevant_dofs_u_;
         IndexSet locally_relevant_dofs_p_;
         DoFTools::extract_locally_relevant_dofs(*dof_handler_u_,
@@ -401,7 +448,7 @@ test(dealii::ConditionalOStream &pcout,
             mapping,
             mg_dof_handlers[l],
             mg_constraints[l],
-            quads_u,
+            quads_u_,
             viscosity,
             weak_boundary_ids,
             spc_step);
@@ -410,7 +457,7 @@ test(dealii::ConditionalOStream &pcout,
             mapping,
             *mg_dof_handlers_u[l],
             *mg_constraints_u[l],
-            quad_u,
+            quad_u_,
             1.0,
             0.0);
 
@@ -423,6 +470,10 @@ test(dealii::ConditionalOStream &pcout,
           dof_handler_p_->locally_owned_dofs(), locally_relevant_dofs_p_);
         AffineConstraints<NumberPreconditioner> empty_constraints_u(
           dof_handler_u_->locally_owned_dofs(), locally_relevant_dofs_u_);
+        DoFTools::make_hanging_node_constraints(*dof_handler_u_,
+                                                empty_constraints_u);
+        DoFTools::make_hanging_node_constraints(*dof_handler_p_,
+                                                empty_constraints_p);
         empty_constraints_u.close();
         empty_constraints_p.close();
         auto sparsity_pattern =
@@ -506,7 +557,8 @@ test(dealii::ConditionalOStream &pcout,
           timer, *Stokes_mf_, *M_mf_, lhs_uK_p, lhs_uM_p, blk_indices[i]);
 #endif
       }
-
+    if (parameters.use_pmg)
+      Assert(fe_ == fe_pmg.end() - 1, ExcInternalError());
     std::unique_ptr<BlockVectorT<NumberPreconditioner>> tmp1, tmp2;
     if (!std::is_same_v<Number, NumberPreconditioner>)
       {
@@ -525,7 +577,7 @@ test(dealii::ConditionalOStream &pcout,
                                        parameters,
                                        n_timesteps_at_once,
                                        mg_type_level,
-                                       poly_time_sequence,
+                                       poly_mg_sequence_time,
                                        dof_handlers,
                                        mg_dof_handlers,
                                        mg_constraints,
@@ -759,7 +811,8 @@ test(dealii::ConditionalOStream &pcout,
         integrate_rhs_function_,
         n_timesteps_at_once,
         parameters.extrapolate,
-        *Stokes_nitsche_mf);
+        *Stokes_nitsche_mf,
+        st_convergence ? 1.e-12 : 1.e-10);
     if (parameters.nitsche_boundary)
       for (auto [b_id, g] : d_map)
         step->add_dirichlet_function(0, b_id, g);

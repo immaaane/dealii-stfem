@@ -3,7 +3,7 @@
     "printTiming"            : "false",
     "spaceTimeMg"            : "true",
     "mgTimeBeforeSpace"      : "false",
-    "timeType"               : "DG",
+    "timeType"               : "CGP",
     "problemType"            : "stokes",
     "spaceTimeConvergenceTest": "false",
     "colorizeBoundary"       : "true",

@@ -126,9 +126,9 @@ public:
         unsigned int       r,
         unsigned int       n_timesteps_at_once,
         const std::vector<std::shared_ptr<const Utilities::MPI::Partitioner>>
-                                      &partitioners_,
-        const bool                     restrict_is_transpose_prolongate,
-        const std::vector<TimeMGType> &mg_type_level)
+                                  &partitioners_,
+        const bool                 restrict_is_transpose_prolongate,
+        const std::vector<MGType> &mg_type_level)
   {
     partitioners                = partitioners_;
     unsigned int const n_levels = partitioners.size();
@@ -138,9 +138,9 @@ public:
     restriction_matrices.resize(n_levels - 1);
     unsigned int n_k_levels = 0, n_tau_levels = 0;
     for (auto const &el : mg_type_level)
-      if (el == TimeMGType::k)
+      if (el == MGType::k)
         ++n_k_levels;
-      else if (el == TimeMGType::tau)
+      else if (el == MGType::tau)
         ++n_tau_levels;
     AssertDimension(n_levels - 1, mg_type_level.size());
     Assert((type == TimeStepType::DG ? r + 1 : r >= n_k_levels),
@@ -151,7 +151,7 @@ public:
     for (auto mgt = mg_type_level.rbegin(); mgt != mg_type_level.rend();
          ++mgt, --i, ++p_matrix, ++r_matrix)
       {
-        bool k_mg = mg_type_level[i] == TimeMGType::k;
+        bool k_mg = mg_type_level[i] == MGType::k;
         *p_matrix =
           k_mg ?
             get_time_projection_matrix(type, r - 1, r, n_timesteps_at_once) :
@@ -194,12 +194,12 @@ class TimeGMG
 
 public:
   TimeGMG(
-    TimerOutput                   &timer,
-    TimeStepType const             type,
-    unsigned int const             r,
-    unsigned int const             n_timesteps_at_once,
-    const std::vector<TimeMGType> &mg_type_level,
-    const DoFHandler<dim>         &dof_handler,
+    TimerOutput               &timer,
+    TimeStepType const         type,
+    unsigned int const         r,
+    unsigned int const         n_timesteps_at_once,
+    const std::vector<MGType> &mg_type_level,
+    const DoFHandler<dim>     &dof_handler,
     const MGLevelObject<std::shared_ptr<const DoFHandler<dim>>>
       &mg_dof_handlers,
     const MGLevelObject<std::shared_ptr<const AffineConstraints<Number>>>
@@ -444,13 +444,13 @@ test(dealii::ConditionalOStream &pcout,
       get_fe_time_weights<Number>(type, fe_degree, time_step_size, 1);
     auto [Alpha, Beta, Gamma, Zeta] = get_fe_time_weights<Number>(
       type, fe_degree, time_step_size, n_timesteps_at_once);
-    std::vector<TimeMGType> mg_type_level =
+    std::vector<MGType> mg_type_level =
       get_time_mg_sequence(1,
                            fe_degree,
                            type == TimeStepType::DG ? 0 : 1,
                            n_timesteps_at_once,
                            1,
-                           TimeMGType::k);
+                           MGType::k);
 
     TimerOutput timer(pcout,
                       TimerOutput::never,

@@ -26,15 +26,28 @@ static std::unordered_map<std::string, TimeStepType> const str_to_time_type = {
   {"DG", TimeStepType::DG},
   {"GCC", TimeStepType::GCC}};
 
-enum class TimeMGType : unsigned int
+enum class MGType : char
 {
-  tau  = 1,
-  k    = 2,
-  none = 3,
+  tau = 't',
+  k   = 'k',
+  h   = 'h',
+  p   = 'p',
 };
 
 namespace dealii
 {
+
+  inline bool
+  is_space_lvl(MGType mg)
+  {
+    return mg == MGType::h || mg == MGType::p;
+  };
+  inline bool
+  is_time_lvl(MGType mg)
+  {
+    return mg == MGType::tau || mg == MGType::k;
+  };
+
   template <typename Number>
   std::array<FullMatrix<Number>, 3>
   get_dg_weights(unsigned int const r);
@@ -48,7 +61,8 @@ namespace dealii
   create_next_polynomial_coarsening_degree(
     const unsigned int previous_fe_degree,
     const MGTransferGlobalCoarseningTools::PolynomialCoarseningSequenceType
-      &p_sequence)
+                &p_sequence,
+    unsigned int k_min = 0u)
   {
     switch (p_sequence)
       {
@@ -60,7 +74,7 @@ namespace dealii
           return std::max(previous_fe_degree - 1, 0u);
         case MGTransferGlobalCoarseningTools::PolynomialCoarseningSequenceType::
           go_to_one:
-          return 0u;
+          return k_min;
         default:
           DEAL_II_NOT_IMPLEMENTED();
           return 0u;
@@ -78,100 +92,155 @@ namespace dealii
     if (degrees.back() == k_min)
       return degrees;
     while (degrees.back() > k_min)
-      degrees.push_back(
-        dealii::create_next_polynomial_coarsening_degree(degrees.back(),
-                                                         p_seq));
+      degrees.push_back(dealii::create_next_polynomial_coarsening_degree(
+        degrees.back(), p_seq, k_min));
 
     std::reverse(degrees.begin(), degrees.end());
     return degrees;
   }
+  template <int dim, typename... fe_types>
+  std::vector<std::vector<std::unique_ptr<FiniteElement<dim>>>>
+  get_fe_pmg_sequence(
+    const std::vector<unsigned int>                     &pmg_sequence,
+    const std::array<unsigned int, sizeof...(fe_types)> &multiplicities,
+    const fe_types &...finite_elements)
+  {
+    Assert(!pmg_sequence.empty(),
+           dealii::ExcMessage("The pmg_sequence must not be empty."));
+    std::vector<std::vector<std::unique_ptr<FiniteElement<dim>>>> fe_pmg(
+      pmg_sequence.size());
+    std::array<int, sizeof...(finite_elements)> fe_degrees = {
+      {static_cast<int>(finite_elements.tensor_degree())...}};
+    std::array<int, sizeof...(fe_types)> strides;
+    std::transform(fe_degrees.begin(),
+                   fe_degrees.end(),
+                   strides.begin(),
+                   [pmg_base = pmg_sequence.back()](int degree) {
+                     return degree - pmg_base;
+                   });
+    for (int l = fe_pmg.size() - 1; l >= 0; --l)
+      {
+        fe_pmg[l].reserve(sizeof...(finite_elements));
+        unsigned int i = 0;
+        (..., [&] {
+          if (multiplicities[i] == 1)
+            fe_pmg[l].emplace_back(std::make_unique<std::decay_t<fe_types>>(
+              pmg_sequence[l] + strides[i]));
+          else
+            fe_pmg[l].emplace_back(std::make_unique<FESystem<dim, dim>>(
+              std::decay_t<fe_types>(pmg_sequence[l] + strides[i]),
+              multiplicities[i]));
+          ++i;
+        }());
+        Assert(fe_pmg[l].size() == sizeof...(finite_elements),
+               ExcInternalError());
+      }
 
-  inline std::vector<TimeMGType>
-  get_time_mg_sequence(
-    unsigned int const        n_sp_lvl,
+    return fe_pmg;
+  }
+
+  inline std::vector<MGType>
+  get_mg_sequence(
+    unsigned int              n_sp_lvl,
     std::vector<unsigned int> k_seq,
+    std::vector<unsigned int> p_seq,
     unsigned int const        n_timesteps_at_once,
     unsigned int const        n_timesteps_at_once_min = 1,
-    TimeMGType                lower_lvl               = TimeMGType::k,
+    MGType                    lower_lvl               = MGType::k,
     CoarseningType            coarsening_type = CoarseningType::space_and_time,
-    bool                      time_before_space = false)
+    bool                      time_before_space     = false,
+    bool                      use_p_multigrid_space = false,
+    bool                      zip_from_back         = true)
   {
     Assert(n_sp_lvl >= 1, ExcLowerRange(n_sp_lvl, 1));
     Assert(k_seq.size() >= 1, ExcLowerRange(k_seq.size(), 1));
     unsigned int n_k_lvl = k_seq.size() - 1;
-    unsigned int n_t_lvl =
-      std::log2(n_timesteps_at_once / n_timesteps_at_once_min);
-    auto upper_lvl =
-      (lower_lvl == TimeMGType::k) ? TimeMGType::tau : TimeMGType::k;
-    if (time_before_space && coarsening_type == CoarseningType::space_and_time)
-      std::swap(upper_lvl, lower_lvl);
-    unsigned int n_ll = (lower_lvl == TimeMGType::k) ? n_k_lvl : n_t_lvl;
-    unsigned int n_ul = (lower_lvl == TimeMGType::k) ? n_t_lvl : n_k_lvl;
-    std::vector<TimeMGType> mg_type_level(n_k_lvl + n_t_lvl + n_sp_lvl - 1,
-                                          TimeMGType::none);
-
+    unsigned int n_t_lvl = log2(n_timesteps_at_once / n_timesteps_at_once_min);
+    MGType       upper_lvl = (lower_lvl == MGType::k) ? MGType::tau : MGType::k;
+    MGType       lower_lvl_s = (lower_lvl == MGType::k) ? MGType::p : MGType::h;
+    MGType       upper_lvl_s = (lower_lvl == MGType::k) ? MGType::h : MGType::p;
+    unsigned int n_ll        = (lower_lvl == MGType::k) ? n_k_lvl : n_t_lvl;
+    unsigned int n_ul        = (lower_lvl == MGType::k) ? n_t_lvl : n_k_lvl;
+    unsigned int n_p_lvl     = (use_p_multigrid_space) ? p_seq.size() - 1 : 0;
+    unsigned int n_ll_s = (lower_lvl == MGType::k) ? n_p_lvl : n_sp_lvl - 1;
+    unsigned int n_ul_s = (lower_lvl == MGType::k) ? n_sp_lvl - 1 : n_p_lvl;
+    std::vector<MGType> time_levels(n_ll, lower_lvl);
+    time_levels.insert(time_levels.end(), n_ul, upper_lvl);
+    std::vector<MGType> space_levels(n_ll_s, lower_lvl_s);
+    space_levels.insert(space_levels.end(), n_ul_s, upper_lvl_s);
+    std::vector<MGType> mg_type_level;
+    auto append_levels = [&](const auto &first, const auto &second) {
+      mg_type_level.insert(mg_type_level.end(), first.begin(), first.end());
+      mg_type_level.insert(mg_type_level.end(), second.begin(), second.end());
+    };
+    auto append_levels_reverse = [&](const auto &first, const auto &second) {
+      mg_type_level.insert(mg_type_level.end(), first.rbegin(), first.rend());
+      mg_type_level.insert(mg_type_level.end(), second.rbegin(), second.rend());
+    };
     if (coarsening_type == CoarseningType::space_or_time)
-      {
-        unsigned int start_lower_lvl = time_before_space ? n_sp_lvl - 1 : 0;
-        unsigned int start_upper_lvl =
-          time_before_space ? n_sp_lvl - 1 + n_ll : n_ll;
-        std::fill_n(mg_type_level.begin() + start_lower_lvl, n_ll, lower_lvl);
-        std::fill_n(mg_type_level.begin() + start_upper_lvl, n_ul, upper_lvl);
-      }
+      if (zip_from_back)
+        append_levels_reverse(time_before_space ? time_levels : space_levels,
+                              time_before_space ? space_levels : time_levels);
+      else
+        append_levels(time_before_space ? time_levels : space_levels,
+                      time_before_space ? space_levels : time_levels);
     else
       {
-        unsigned int ii  = std::min(mg_type_level.size() - 1,
-                                   static_cast<size_t>((n_ul + n_ll) * 2 - 1));
-        unsigned int isp = 0;
-        for (unsigned int j = n_ul + n_ll; j > 0; --j)
+        size_t time_size = time_levels.size(), space_size = space_levels.size();
+        size_t max_levels = std::max(time_size, space_size);
+        auto   get_index =
+          [&](const std::vector<MGType> &levels, size_t i, bool reverse) {
+            return reverse ? levels[levels.size() - 1 - i] : levels[i];
+          };
+        for (size_t i = 0; i < max_levels; ++i)
           {
-            if (isp < n_sp_lvl - 1)
-              mg_type_level[ii] = TimeMGType::none, --ii, ++isp;
-            mg_type_level[ii] = j <= n_ll ? lower_lvl : upper_lvl, --ii;
+            if (i < (time_before_space ? time_size : space_size))
+              mg_type_level.push_back(
+                get_index(time_before_space ? time_levels : space_levels,
+                          i,
+                          zip_from_back));
+            if (i < (time_before_space ? space_size : time_size))
+              mg_type_level.push_back(
+                get_index(time_before_space ? space_levels : time_levels,
+                          i,
+                          zip_from_back));
           }
-        if (time_before_space)
+        if (zip_from_back)
           std::reverse(mg_type_level.begin(), mg_type_level.end());
       }
     return mg_type_level;
   }
 
   inline std::vector<size_t>
-  get_precondition_stmg_types(std::vector<TimeMGType> const &mg_type_level,
-                              CoarseningType                 coarsening_type,
-                              bool                           time_before_space)
+  get_precondition_stmg_types(std::vector<MGType> const &mg_type_level,
+                              CoarseningType             coarsening_type,
+                              bool                       time_before_space,
+                              [[maybe_unused]] bool      zip_from_back)
   {
     std::vector<size_t> ret(mg_type_level.size() + 1, 1);
     if (coarsening_type == CoarseningType::space_or_time)
       return ret;
-    size_t start = time_before_space ? mg_type_level.size() - 1 : 0;
-    int    step  = time_before_space ? -1 : 1;
-    for (size_t i = start;
-         (time_before_space ? i > 0 : i < mg_type_level.size() - 1);
-         i += step)
-      {
-        if (mg_type_level[i] != TimeMGType::none &&
-            mg_type_level[i + step] == TimeMGType::none)
-          {
-            ret[i]        = time_before_space ? 0 : 1;
-            ret[i + step] = time_before_space ? 1 : 0;
-            i += step;
-          }
-      }
-
+    for (size_t i = 0; i < mg_type_level.size() - 1; ++i)
+      // maybe replace by time_before_space == zip_from_back
+      if (time_before_space ?
+            is_space_lvl(mg_type_level[i]) &&
+              is_time_lvl(mg_type_level[i + 1]) :
+            is_time_lvl(mg_type_level[i]) && is_space_lvl(mg_type_level[i + 1]))
+        ret[i] = 1, ret[i + 1] = 0, ++i;
     return ret;
   }
 
   template <int dim>
   std::vector<std::shared_ptr<const Triangulation<dim>>>
   get_space_time_triangulation(
-    std::vector<TimeMGType> const &mg_type_level,
+    std::vector<MGType> const &mg_type_level,
     std::vector<std::shared_ptr<const Triangulation<dim>>> const
       &mg_triangulations)
   {
     AssertDimension(mg_triangulations.size() - 1,
                     std::count(mg_type_level.begin(),
                                mg_type_level.end(),
-                               TimeMGType::none));
+                               MGType::h));
     std::vector<std::shared_ptr<const Triangulation<dim>>>
          new_mg_triangulations(1 + mg_type_level.size());
     auto mg_tria_it              = mg_triangulations.rbegin();
@@ -181,7 +250,7 @@ namespace dealii
     for (auto mgt = mg_type_level.rbegin(); mgt != mg_type_level.rend();
          ++mgt, --ii)
       {
-        if (*mgt == TimeMGType::none)
+        if (*mgt == MGType::h)
           ++mg_tria_it;
         new_mg_triangulations.at(ii) = *mg_tria_it;
       }
@@ -448,7 +517,7 @@ namespace dealii
   get_fe_time_weights(TimeStepType                     type,
                       double                           time_step_size,
                       unsigned int                     n_timesteps_at_once,
-                      std::vector<TimeMGType> const   &mg_type_level,
+                      std::vector<MGType> const       &mg_type_level,
                       std::vector<unsigned int> const &poly_time_sequence,
                       F const &get_fetw = get_fe_time_weights<Number>)
   {
@@ -461,9 +530,9 @@ namespace dealii
     for (auto mgt = mg_type_level.rbegin(); mgt != mg_type_level.rend();
          ++mgt, ++tw)
       {
-        if (*mgt == TimeMGType::k)
+        if (*mgt == MGType::k)
           ++p_mg;
-        else if (*mgt == TimeMGType::tau)
+        else if (*mgt == MGType::tau)
           n_timesteps_at_once /= 2, time_step_size *= 2;
         *tw = get_fetw(type, *p_mg, time_step_size, n_timesteps_at_once);
       }
@@ -476,7 +545,7 @@ namespace dealii
   get_fe_time_weights_wave(TimeStepType                     type,
                            double                           time_step_size,
                            unsigned int                     n_timesteps_at_once,
-                           std::vector<TimeMGType> const   &mg_type_level,
+                           std::vector<MGType> const       &mg_type_level,
                            std::vector<unsigned int> const &poly_time_sequence)
   {
     auto time_weights = get_fe_time_weights<Number>(type,
@@ -865,7 +934,7 @@ namespace dealii
     std::array<unsigned int, 3>
     operator()(unsigned int index) const
     {
-      Assert((n_blocks() - 1 >= index), ExcLowerRange(n_blocks() - 1, index));
+      Assert(n_blocks() > index, ExcLowerRange(n_blocks(), index));
       return cache[index];
     }
 

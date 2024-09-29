@@ -5,6 +5,6 @@
     "uMean"                  : "1.0",
     "meanPressure"           : "false",
     "viscosity"              : "1.e-3",
-    "dfgBenchmark"           : "1",
+    "dfgBenchmark"           : "3",
     "dGPressure"             : "true"
 }

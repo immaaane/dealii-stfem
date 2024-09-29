@@ -64,11 +64,11 @@ namespace stokes
                             ((t < 1. / dirichlet_factor) ?
                                0.5 - 0.5 * cos(dirichlet_factor * PI * t) :
                                1.0);
-      if (component == 0 && x(0) < 1.e-10)
+      if (component == 0)
         {
           if (dim == 3)
-            return -16. * u_max * factor * x(1) * (x(2) - 0.41 / 2.) *
-                   (0.41 - x(1)) * (x(2) + 0.41 / 2.) / pow(0.41, 4);
+            return 16. * u_max * factor * x(2) * (x(2) - 0.41) * x(1) *
+                   (x(1) - 0.41) / pow(0.41, 4);
           else
             return ((4. * u_max * factor * x(1) * (0.41 - x(1))) /
                     (pow(0.41, 2)));
@@ -137,29 +137,29 @@ namespace stokes
                              dof_handler_u_.get_communicator());
 
     // Create the block sparsity pattern for each block
-    make_block_sparsity_pattern_block(dof_handler_u_,
-                                      dof_handler_u_,
-                                      sparsity_pattern->block(0, 0),
-                                      constraints_u,
-                                      constraints_u,
-                                      true,
-                                      subdomain);
+    DoFTools::make_block_sparsity_pattern_block(dof_handler_u_,
+                                                dof_handler_u_,
+                                                sparsity_pattern->block(0, 0),
+                                                constraints_u,
+                                                constraints_u,
+                                                true,
+                                                subdomain);
 
-    make_block_sparsity_pattern_block(dof_handler_u_,
-                                      dof_handler_p_,
-                                      sparsity_pattern->block(0, 1),
-                                      constraints_u,
-                                      constraints_p,
-                                      true,
-                                      subdomain);
+    DoFTools::make_block_sparsity_pattern_block(dof_handler_u_,
+                                                dof_handler_p_,
+                                                sparsity_pattern->block(0, 1),
+                                                constraints_u,
+                                                constraints_p,
+                                                true,
+                                                subdomain);
 
-    make_block_sparsity_pattern_block(dof_handler_p_,
-                                      dof_handler_u_,
-                                      sparsity_pattern->block(1, 0),
-                                      constraints_p,
-                                      constraints_u,
-                                      true,
-                                      subdomain);
+    DoFTools::make_block_sparsity_pattern_block(dof_handler_p_,
+                                                dof_handler_u_,
+                                                sparsity_pattern->block(1, 0),
+                                                constraints_p,
+                                                constraints_u,
+                                                true,
+                                                subdomain);
     // Compress the sparsity pattern
     sparsity_pattern->compress();
     return sparsity_pattern;

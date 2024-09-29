@@ -57,7 +57,7 @@ Average GMRES iterations 14.75 (59 gmres_iterations / 4 timesteps)
 :: Number of u degrees of freedom per cell: 32
 :: Number of p degrees of freedom per cell: 6
 :: Min Level 0  Max Level 4
-Average GMRES iterations 17 (136 gmres_iterations / 8 timesteps)
+Average GMRES iterations 14 (112 gmres_iterations / 8 timesteps)
 
 
 :: Number of active cells: 64
@@ -66,7 +66,7 @@ Average GMRES iterations 17 (136 gmres_iterations / 8 timesteps)
 :: Number of u degrees of freedom per cell: 32
 :: Number of p degrees of freedom per cell: 6
 :: Min Level 0  Max Level 5
-Average GMRES iterations 17 (272 gmres_iterations / 16 timesteps)
+Average GMRES iterations 16 (256 gmres_iterations / 16 timesteps)
 
 
 :: Number of active cells: 256
@@ -80,8 +80,8 @@ Average GMRES iterations 18 (576 gmres_iterations / 32 timesteps)
 Convergence table k=2
 cells s-dofs t-dofs st-dofs   work     L∞-L∞(u)       L2-L2(u)      L2-H1_semi(u)   L2-Hdiv_semi(u)    L∞-L∞(p)       L2-L2(p)      L2-H1_semi(p)   
     4    122      3    1464    21594 1.35335e-02    - 5.07285e-03    - 1.27840e-01    - 1.2309e-03     - 8.58760e-02    - 3.00939e-02    - 4.99127e-01    - 
-   16    434      3   10416   177072 1.12473e-03 3.59 2.99321e-04 4.08 1.41417e-02 3.18 7.2216e-03 -2.55 1.80596e-02 2.25 3.84652e-03 2.97 1.37319e-01 1.86 
-   64   1634      3   78432  1333344 9.38702e-05 3.58 1.92448e-05 3.96 1.80534e-03 2.97 9.4874e-04  2.93 1.68204e-03 3.42 4.81968e-04 3.00 3.54306e-02 1.95 
+   16    434      3   10416   145824 1.12473e-03 3.59 2.99321e-04 4.08 1.41417e-02 3.18 7.2216e-03 -2.55 1.80596e-02 2.25 3.84652e-03 2.97 1.37319e-01 1.86 
+   64   1634      3   78432  1254912 9.38702e-05 3.58 1.92448e-05 3.96 1.80534e-03 2.97 9.4874e-04  2.93 1.68204e-03 3.42 4.81968e-04 3.00 3.54306e-02 1.95 
   256   6338      3  608448 10952064 6.32029e-06 3.89 1.21376e-06 3.99 2.27262e-04 2.99 1.2105e-04  2.97 2.24355e-04 2.91 6.02988e-05 3.00 8.93490e-03 1.99 
 
 
@@ -91,7 +91,7 @@ cells s-dofs t-dofs st-dofs   work     L∞-L∞(u)       L2-L2(u)      L2-H1_se
 :: Number of u degrees of freedom per cell: 50
 :: Number of p degrees of freedom per cell: 10
 :: Min Level 0  Max Level 4
-Average GMRES iterations 25 (100 gmres_iterations / 4 timesteps)
+Average GMRES iterations 29 (116 gmres_iterations / 4 timesteps)
 
 
 :: Number of active cells: 16
@@ -109,7 +109,7 @@ Average GMRES iterations 22 (176 gmres_iterations / 8 timesteps)
 :: Number of u degrees of freedom per cell: 50
 :: Number of p degrees of freedom per cell: 10
 :: Min Level 0  Max Level 6
-Average GMRES iterations 54.5 (872 gmres_iterations / 16 timesteps)
+Average GMRES iterations 22 (352 gmres_iterations / 16 timesteps)
 
 
 :: Number of active cells: 256
@@ -118,20 +118,64 @@ Average GMRES iterations 54.5 (872 gmres_iterations / 16 timesteps)
 :: Number of u degrees of freedom per cell: 50
 :: Number of p degrees of freedom per cell: 10
 :: Min Level 0  Max Level 7
-Average GMRES iterations 43.4062 (1389 gmres_iterations / 32 timesteps)
+Average GMRES iterations 25 (800 gmres_iterations / 32 timesteps)
 
 Convergence table k=3
 cells s-dofs t-dofs st-dofs   work     L∞-L∞(u)       L2-L2(u)      L2-H1_semi(u)   L2-Hdiv_semi(u)   L∞-L∞(p)       L2-L2(p)      L2-H1_semi(p)   
-    4    202      4    3232    80800 1.88439e-03    - 6.15698e-04    - 1.76476e-02    - 1.6290e-02    - 7.53062e-02    - 1.35086e-02    - 2.85590e-01    - 
-   16    738      4   23616   519552 7.88843e-05 4.58 2.58718e-05 4.57 1.50793e-03 3.55 8.9205e-04 4.19 3.67245e-03 4.36 7.14994e-04 4.24 3.52070e-02 3.02 
-   64   2818      4  180352  9829184 3.02452e-06 4.70 8.53752e-07 4.92 9.63832e-05 3.97 5.8974e-05 3.92 2.25640e-04 4.02 4.66961e-05 3.94 4.67964e-03 2.91 
-  256  11010      4 1409280 61171560 1.02353e-07 4.89 2.70264e-08 4.98 6.03520e-06 4.00 3.7049e-06 3.99 1.42925e-05 3.98 2.96232e-06 3.98 5.95066e-04 2.98 
+    4    202      4    3232    93728 1.88820e-03    - 6.15704e-04    - 1.76476e-02    - 1.6290e-02    - 7.53216e-02    - 1.35086e-02    - 2.85590e-01    - 
+   16    738      4   23616   519552 7.88844e-05 4.58 2.58718e-05 4.57 1.50793e-03 3.55 8.9205e-04 4.19 3.67245e-03 4.36 7.14994e-04 4.24 3.52070e-02 3.02 
+   64   2818      4  180352  3967744 3.02450e-06 4.70 8.53752e-07 4.92 9.63832e-05 3.97 5.8974e-05 3.92 2.25640e-04 4.02 4.66961e-05 3.94 4.67964e-03 2.91 
+  256  11010      4 1409280 35232000 1.02353e-07 4.89 2.70264e-08 4.98 6.03520e-06 4.00 3.7049e-06 3.99 1.42917e-05 3.98 2.96232e-06 3.98 5.95066e-04 2.98 
+
+
+:: Number of active cells: 4
+:: Number of u degrees of freedom: 242
+:: Number of p degrees of freedom: 60
+:: Number of u degrees of freedom per cell: 72
+:: Number of p degrees of freedom per cell: 15
+:: Min Level 0  Max Level 5
+Average GMRES iterations 17 (68 gmres_iterations / 4 timesteps)
+
+
+:: Number of active cells: 16
+:: Number of u degrees of freedom: 882
+:: Number of p degrees of freedom: 240
+:: Number of u degrees of freedom per cell: 72
+:: Number of p degrees of freedom per cell: 15
+:: Min Level 0  Max Level 6
+Average GMRES iterations 28 (224 gmres_iterations / 8 timesteps)
+
+
+:: Number of active cells: 64
+:: Number of u degrees of freedom: 3362
+:: Number of p degrees of freedom: 960
+:: Number of u degrees of freedom per cell: 72
+:: Number of p degrees of freedom per cell: 15
+:: Min Level 0  Max Level 7
+Average GMRES iterations 46 (736 gmres_iterations / 16 timesteps)
+
+
+:: Number of active cells: 256
+:: Number of u degrees of freedom: 13122
+:: Number of p degrees of freedom: 3840
+:: Number of u degrees of freedom per cell: 72
+:: Number of p degrees of freedom per cell: 15
+:: Min Level 0  Max Level 8
+Average GMRES iterations 43.7812 (1401 gmres_iterations / 32 timesteps)
+
+Convergence table k=4
+cells s-dofs t-dofs st-dofs   work      L∞-L∞(u)       L2-L2(u)      L2-H1_semi(u)   L2-Hdiv_semi(u)   L∞-L∞(p)       L2-L2(p)      L2-H1_semi(p)   
+    4    302      5    6040    102680 2.52550e-04    - 1.00279e-04    - 4.08254e-03    - 6.1022e-04    - 5.58501e-03    - 1.14907e-03    - 4.69841e-02    - 
+   16   1122      5   44880   1256640 7.93116e-06 4.99 2.32706e-06 5.43 1.44601e-04 4.82 1.0657e-04 2.52 1.08249e-03 2.37 1.11534e-04 3.36 7.21700e-03 2.70 
+   64   4322      5  345760  15904960 1.42519e-07 5.80 3.98114e-08 5.87 4.78345e-06 4.92 3.6748e-06 4.86 2.66009e-05 5.35 3.58645e-06 4.96 4.65878e-04 3.95 
+  256  16962      5 2713920 118818810 2.67716e-09 5.73 6.39208e-10 5.96 1.52453e-07 4.97 1.1875e-07 4.95 8.05672e-07 5.05 1.12644e-07 4.99 2.92114e-05 4.00 
 
 Iteration count table
 k \ r    1       2       3       4    
     1 12.0000 12.0000 13.0000 13.0000 
-    2 14.7500 17.0000 17.0000 18.0000 
-    3 25.0000 22.0000 54.5000 43.4062 
+    2 14.7500 14.0000 16.0000 18.0000 
+    3 29.0000 22.0000 22.0000 25.0000 
+    4 17.0000 28.0000 46.0000 43.7812 
 
 
 :: Number of active cells: 4
@@ -140,7 +184,7 @@ k \ r    1       2       3       4
 :: Number of u degrees of freedom per cell: 18
 :: Number of p degrees of freedom per cell: 3
 :: Min Level 0  Max Level 1
-Average GMRES iterations 8.25 (33 gmres_iterations / 4 timesteps)
+Average GMRES iterations 7 (28 gmres_iterations / 4 timesteps)
 
 
 :: Number of active cells: 16
@@ -149,7 +193,7 @@ Average GMRES iterations 8.25 (33 gmres_iterations / 4 timesteps)
 :: Number of u degrees of freedom per cell: 18
 :: Number of p degrees of freedom per cell: 3
 :: Min Level 0  Max Level 2
-Average GMRES iterations 12.5 (100 gmres_iterations / 8 timesteps)
+Average GMRES iterations 10 (80 gmres_iterations / 8 timesteps)
 
 
 :: Number of active cells: 64
@@ -158,7 +202,7 @@ Average GMRES iterations 12.5 (100 gmres_iterations / 8 timesteps)
 :: Number of u degrees of freedom per cell: 18
 :: Number of p degrees of freedom per cell: 3
 :: Min Level 0  Max Level 3
-Average GMRES iterations 14.5625 (233 gmres_iterations / 16 timesteps)
+Average GMRES iterations 13 (208 gmres_iterations / 16 timesteps)
 
 
 :: Number of active cells: 256
@@ -167,14 +211,14 @@ Average GMRES iterations 14.5625 (233 gmres_iterations / 16 timesteps)
 :: Number of u degrees of freedom per cell: 18
 :: Number of p degrees of freedom per cell: 3
 :: Min Level 0  Max Level 4
-Average GMRES iterations 14.4062 (461 gmres_iterations / 32 timesteps)
+Average GMRES iterations 13 (416 gmres_iterations / 32 timesteps)
 
 Convergence table k=1
 cells s-dofs t-dofs st-dofs  work     L∞-L∞(u)       L2-L2(u)      L2-H1_semi(u)   L2-Hdiv_semi(u)   L∞-L∞(p)       L2-L2(p)      L2-H1_semi(p)   
-    4     62      1     248    2046 3.32178e-02    - 1.66987e-02    - 2.84040e-01    - 2.2050e-01    - 9.97870e-02    - 3.91890e-02    - 6.16496e-01    - 
-   16    210      1    1680   21000 7.73415e-03 2.10 3.22898e-03 2.37 1.05169e-01 1.43 4.9783e-02 2.15 5.78656e-02 0.79 1.83836e-02 1.09 3.91631e-01 0.65 
-   64    770      1   12320  179410 1.35021e-03 2.52 4.32068e-04 2.90 2.66008e-02 1.98 1.3150e-02 1.92 1.24055e-02 2.22 3.68494e-03 2.32 1.88579e-01 1.05 
-  256   2946      1   94272 1358106 1.77181e-04 2.93 5.60008e-05 2.95 6.66386e-03 2.00 3.3229e-03 1.98 2.80594e-03 2.14 8.59896e-04 2.10 9.33561e-02 1.01 
+    4     62      1     248    1736 3.32178e-02    - 1.66987e-02    - 2.84040e-01    - 2.2050e-01    - 9.97870e-02    - 3.91890e-02    - 6.16496e-01    - 
+   16    210      1    1680   16800 7.73415e-03 2.10 3.22898e-03 2.37 1.05169e-01 1.43 4.9783e-02 2.15 5.78657e-02 0.79 1.83836e-02 1.09 3.91631e-01 0.65 
+   64    770      1   12320  160160 1.35021e-03 2.52 4.32068e-04 2.90 2.66008e-02 1.98 1.3150e-02 1.92 1.24055e-02 2.22 3.68494e-03 2.32 1.88579e-01 1.05 
+  256   2946      1   94272 1225536 1.77181e-04 2.93 5.60008e-05 2.95 6.66386e-03 2.00 3.3229e-03 1.98 2.80594e-03 2.14 8.59896e-04 2.10 9.33561e-02 1.01 
 
 
 :: Number of active cells: 4
@@ -183,7 +227,7 @@ cells s-dofs t-dofs st-dofs  work     L∞-L∞(u)       L2-L2(u)      L2-H1_sem
 :: Number of u degrees of freedom per cell: 32
 :: Number of p degrees of freedom per cell: 6
 :: Min Level 0  Max Level 2
-Average GMRES iterations 19 (76 gmres_iterations / 4 timesteps)
+Average GMRES iterations 15 (60 gmres_iterations / 4 timesteps)
 
 
 :: Number of active cells: 16
@@ -192,7 +236,7 @@ Average GMRES iterations 19 (76 gmres_iterations / 4 timesteps)
 :: Number of u degrees of freedom per cell: 32
 :: Number of p degrees of freedom per cell: 6
 :: Min Level 0  Max Level 3
-Average GMRES iterations 17.75 (142 gmres_iterations / 8 timesteps)
+Average GMRES iterations 14 (112 gmres_iterations / 8 timesteps)
 
 
 :: Number of active cells: 64
@@ -201,7 +245,7 @@ Average GMRES iterations 17.75 (142 gmres_iterations / 8 timesteps)
 :: Number of u degrees of freedom per cell: 32
 :: Number of p degrees of freedom per cell: 6
 :: Min Level 0  Max Level 4
-Average GMRES iterations 19 (304 gmres_iterations / 16 timesteps)
+Average GMRES iterations 16 (256 gmres_iterations / 16 timesteps)
 
 
 :: Number of active cells: 256
@@ -210,14 +254,14 @@ Average GMRES iterations 19 (304 gmres_iterations / 16 timesteps)
 :: Number of u degrees of freedom per cell: 32
 :: Number of p degrees of freedom per cell: 6
 :: Min Level 0  Max Level 5
-Average GMRES iterations 18 (576 gmres_iterations / 32 timesteps)
+Average GMRES iterations 17 (544 gmres_iterations / 32 timesteps)
 
 Convergence table k=2
 cells s-dofs t-dofs st-dofs  work     L∞-L∞(u)       L2-L2(u)      L2-H1_semi(u)   L2-Hdiv_semi(u)    L∞-L∞(p)       L2-L2(p)      L2-H1_semi(p)   
-    4    122      2     976   18544 1.35292e-02    - 5.07337e-03    - 1.27840e-01    - 1.2310e-03     - 8.56899e-02    - 3.00939e-02    - 4.99125e-01    - 
-   16    434      2    6944  123256 1.12314e-03 3.59 2.99332e-04 4.08 1.41417e-02 3.18 7.2215e-03 -2.55 1.80599e-02 2.25 3.84652e-03 2.97 1.37319e-01 1.86 
-   64   1634      2   52288  993472 9.36636e-05 3.58 1.92459e-05 3.96 1.80534e-03 2.97 9.4874e-04  2.93 1.68186e-03 3.42 4.81968e-04 3.00 3.54305e-02 1.95 
-  256   6338      2  405632 7301376 6.28955e-06 3.90 1.21400e-06 3.99 2.27262e-04 2.99 1.2105e-04  2.97 2.24369e-04 2.91 6.02988e-05 3.00 8.93490e-03 1.99 
+    4    122      2     976   14640 1.35292e-02    - 5.07337e-03    - 1.27840e-01    - 1.2310e-03     - 8.56899e-02    - 3.00939e-02    - 4.99125e-01    - 
+   16    434      2    6944   97216 1.12314e-03 3.59 2.99332e-04 4.08 1.41417e-02 3.18 7.2215e-03 -2.55 1.80598e-02 2.25 3.84652e-03 2.97 1.37319e-01 1.86 
+   64   1634      2   52288  836608 9.36638e-05 3.58 1.92459e-05 3.96 1.80534e-03 2.97 9.4874e-04  2.93 1.68182e-03 3.42 4.81968e-04 3.00 3.54305e-02 1.95 
+  256   6338      2  405632 6895744 6.28956e-06 3.90 1.21400e-06 3.99 2.27262e-04 2.99 1.2105e-04  2.97 2.24306e-04 2.91 6.02988e-05 3.00 8.93490e-03 1.99 
 
 
 :: Number of active cells: 4
@@ -226,7 +270,7 @@ cells s-dofs t-dofs st-dofs  work     L∞-L∞(u)       L2-L2(u)      L2-H1_sem
 :: Number of u degrees of freedom per cell: 50
 :: Number of p degrees of freedom per cell: 10
 :: Min Level 0  Max Level 3
-Average GMRES iterations 23 (92 gmres_iterations / 4 timesteps)
+Average GMRES iterations 18 (72 gmres_iterations / 4 timesteps)
 
 
 :: Number of active cells: 16
@@ -235,7 +279,7 @@ Average GMRES iterations 23 (92 gmres_iterations / 4 timesteps)
 :: Number of u degrees of freedom per cell: 50
 :: Number of p degrees of freedom per cell: 10
 :: Min Level 0  Max Level 4
-Average GMRES iterations 26 (208 gmres_iterations / 8 timesteps)
+Average GMRES iterations 17 (136 gmres_iterations / 8 timesteps)
 
 
 :: Number of active cells: 64
@@ -244,7 +288,7 @@ Average GMRES iterations 26 (208 gmres_iterations / 8 timesteps)
 :: Number of u degrees of freedom per cell: 50
 :: Number of p degrees of freedom per cell: 10
 :: Min Level 0  Max Level 5
-Average GMRES iterations 24.8125 (397 gmres_iterations / 16 timesteps)
+Average GMRES iterations 21 (336 gmres_iterations / 16 timesteps)
 
 
 :: Number of active cells: 256
@@ -253,19 +297,63 @@ Average GMRES iterations 24.8125 (397 gmres_iterations / 16 timesteps)
 :: Number of u degrees of freedom per cell: 50
 :: Number of p degrees of freedom per cell: 10
 :: Min Level 0  Max Level 6
-Average GMRES iterations 23.4375 (750 gmres_iterations / 32 timesteps)
+Average GMRES iterations 23 (736 gmres_iterations / 32 timesteps)
 
 Convergence table k=3
 cells s-dofs t-dofs st-dofs   work     L∞-L∞(u)       L2-L2(u)      L2-H1_semi(u)   L2-Hdiv_semi(u)   L∞-L∞(p)       L2-L2(p)      L2-H1_semi(p)   
-    4    202      3    2424    55752 1.88482e-03    - 6.15696e-04    - 1.76476e-02    - 1.6290e-02    - 7.53063e-02    - 1.35086e-02    - 2.85590e-01    - 
-   16    738      3   17712   460512 7.89073e-05 4.58 2.58718e-05 4.57 1.50793e-03 3.55 8.9205e-04 4.19 3.67249e-03 4.36 7.14994e-04 4.24 3.52070e-02 3.02 
-   64   2818      3  135264  3356238 3.02523e-06 4.71 8.53752e-07 4.92 9.63832e-05 3.97 5.8974e-05 3.92 2.25641e-04 4.02 4.66961e-05 3.94 4.67964e-03 2.91 
-  256  11010      3 1056960 24772500 1.02387e-07 4.88 2.70264e-08 4.98 6.03520e-06 4.00 3.7049e-06 3.99 1.42914e-05 3.98 2.96232e-06 3.98 5.95066e-04 2.98 
+    4    202      3    2424    43632 1.88482e-03    - 6.15696e-04    - 1.76476e-02    - 1.6290e-02    - 7.53063e-02    - 1.35086e-02    - 2.85590e-01    - 
+   16    738      3   17712   301104 7.89073e-05 4.58 2.58718e-05 4.57 1.50793e-03 3.55 8.9205e-04 4.19 3.67249e-03 4.36 7.14994e-04 4.24 3.52070e-02 3.02 
+   64   2818      3  135264  2840544 3.02522e-06 4.71 8.53752e-07 4.92 9.63832e-05 3.97 5.8974e-05 3.92 2.25642e-04 4.02 4.66961e-05 3.94 4.67964e-03 2.91 
+  256  11010      3 1056960 24310080 1.02386e-07 4.88 2.70264e-08 4.98 6.03520e-06 4.00 3.7049e-06 3.99 1.42913e-05 3.98 2.96232e-06 3.98 5.95066e-04 2.98 
+
+
+:: Number of active cells: 4
+:: Number of u degrees of freedom: 242
+:: Number of p degrees of freedom: 60
+:: Number of u degrees of freedom per cell: 72
+:: Number of p degrees of freedom per cell: 15
+:: Min Level 0  Max Level 4
+Average GMRES iterations 18 (72 gmres_iterations / 4 timesteps)
+
+
+:: Number of active cells: 16
+:: Number of u degrees of freedom: 882
+:: Number of p degrees of freedom: 240
+:: Number of u degrees of freedom per cell: 72
+:: Number of p degrees of freedom per cell: 15
+:: Min Level 0  Max Level 5
+Average GMRES iterations 47.25 (378 gmres_iterations / 8 timesteps)
+
+
+:: Number of active cells: 64
+:: Number of u degrees of freedom: 3362
+:: Number of p degrees of freedom: 960
+:: Number of u degrees of freedom per cell: 72
+:: Number of p degrees of freedom per cell: 15
+:: Min Level 0  Max Level 6
+Average GMRES iterations 27 (432 gmres_iterations / 16 timesteps)
+
+
+:: Number of active cells: 256
+:: Number of u degrees of freedom: 13122
+:: Number of p degrees of freedom: 3840
+:: Number of u degrees of freedom per cell: 72
+:: Number of p degrees of freedom per cell: 15
+:: Min Level 0  Max Level 7
+Average GMRES iterations 28 (896 gmres_iterations / 32 timesteps)
+
+Convergence table k=4
+cells s-dofs t-dofs st-dofs   work     L∞-L∞(u)       L2-L2(u)      L2-H1_semi(u)   L2-Hdiv_semi(u)   L∞-L∞(p)       L2-L2(p)      L2-H1_semi(p)   
+    4    302      4    4832    86976 2.52541e-04    - 1.00278e-04    - 4.08254e-03    - 6.1022e-04    - 5.58487e-03    - 1.14907e-03    - 4.69841e-02    - 
+   16   1122      4   35904  1696464 7.93173e-06 4.99 2.32706e-06 5.43 1.44601e-04 4.82 1.0657e-04 2.52 1.08288e-03 2.37 1.11534e-04 3.36 7.21700e-03 2.70 
+   64   4322      4  276608  7468416 1.42514e-07 5.80 3.98114e-08 5.87 4.78345e-06 4.92 3.6748e-06 4.86 2.65563e-05 5.35 3.58660e-06 4.96 4.65879e-04 3.95 
+  256  16962      4 2171136 60791808 2.68555e-09 5.73 6.39558e-10 5.96 1.52457e-07 4.97 1.1875e-07 4.95 1.11663e-06 4.57 1.31207e-07 4.77 2.92147e-05 4.00 
 
 Iteration count table
 k \ r    1       2       3       4    
-    1  8.2500 12.5000 14.5625 14.4062 
-    2 19.0000 17.7500 19.0000 18.0000 
-    3 23.0000 26.0000 24.8125 23.4375 
+    1  7.0000 10.0000 13.0000 13.0000 
+    2 15.0000 14.0000 16.0000 17.0000 
+    3 18.0000 17.0000 21.0000 23.0000 
+    4 18.0000 47.2500 27.0000 28.0000 
 
 

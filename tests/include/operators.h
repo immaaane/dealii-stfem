@@ -789,17 +789,17 @@ namespace dealii
     {
       if (constraints == nullptr)
         constraints = &matrix_free.get_affine_constraints();
-      compute_matrix(matrix_free,
-                     *constraints,
-                     sparse_matrix,
-                     &MatrixFreeOperator::do_cell_integral_local,
-                     this);
-      // MatrixFreeTools::compute_matrix(
-      //   matrix_free,
-      //   matrix_free.get_affine_constraints(),
-      //   sparse_matrix,
-      //   &MatrixFreeOperator::do_cell_integral_local,
-      //   this);
+      // compute_matrix(matrix_free,
+      //                *constraints,
+      //                sparse_matrix,
+      //                &MatrixFreeOperator::do_cell_integral_local,
+      //                this);
+      MatrixFreeTools::compute_matrix(
+        matrix_free,
+        *constraints,
+        sparse_matrix,
+        &MatrixFreeOperator::do_cell_integral_local,
+        this);
     }
 
     std::shared_ptr<DiagonalMatrix<VectorType>> const &
@@ -1049,7 +1049,7 @@ namespace dealii
           &matrix_free.get_affine_constraints(0),
           &matrix_free.get_affine_constraints(1)};
       if (!weak_boundary_ids.empty())
-        compute_matrix(
+        MatrixFreeTools::compute_matrix(
           matrix_free,
           constraints,
           sparse_matrix,
@@ -1058,11 +1058,12 @@ namespace dealii
           &StokesMatrixFreeOperator::do_boundary_face_integral_local,
           this);
       else
-        compute_matrix(matrix_free,
-                       constraints,
-                       sparse_matrix,
-                       &StokesMatrixFreeOperator::do_cell_integral_local,
-                       this);
+        MatrixFreeTools::compute_matrix(
+          matrix_free,
+          constraints,
+          sparse_matrix,
+          &StokesMatrixFreeOperator::do_cell_integral_local,
+          this);
     }
 
     types::global_dof_index
