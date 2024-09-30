@@ -86,6 +86,7 @@ namespace stokes
   {
     LidDriven(stokes::Parameters const &stokes_parameters)
       : Function<dim, Number>(dim)
+      , is_time_dependent(stokes_parameters.dfg_benchmark == 0)
       , u_max(stokes_parameters.u_mean)
     {}
 
@@ -93,15 +94,18 @@ namespace stokes
     value(Point<dim> const &, unsigned int const component) const override final
     {
       auto       t      = this->get_time();
-      auto const factor = (t < 1. / dirichlet_factor) ?
-                            0.5 - 0.5 * cos(dirichlet_factor * PI * t) :
-                            1.0;
+      auto const factor = is_time_dependent ?
+                            sin(PI * t / 4.0) :
+                            ((t < 1. / dirichlet_factor) ?
+                               0.5 - 0.5 * cos(dirichlet_factor * PI * t) :
+                               1.0);
       if (component == 1)
         return factor * u_max;
       return 0.;
     }
 
   private:
+    bool   is_time_dependent;
     double u_max;
   };
 
