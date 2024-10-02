@@ -5,7 +5,7 @@ from hashlib import blake2b # just a fast hash function
 
 def generate_hash(args):
     # Create a unique string from all arguments
-    arg_str = f"{args.job}{args.nodes}{args.tpern}{args.part}{args.cpupt}{args.lim}{args.param}{args.dim}"
+    arg_str = f"{args.executable}{args.job}{args.nodes}{args.tpern}{args.part}{args.cpupt}{args.lim}{args.param}{args.dim}"
     if args.precon_float:
         arg_str += "precondition_float"
     hash_object = blake2b(digest_size=3)
@@ -25,7 +25,7 @@ def generate_slurm_script(args):
 #SBATCH --output={base_filename}.log # log file which will contain all output
 
 # commands to be executed
-srun  --mpi=pmi2 ./tests/tp_01.release/tp_01.release --file {args.param} --dim {args.dim}"""
+srun  --mpi=pmix {args.executable} --file {args.param} --dim {args.dim}"""
     if args.precon_float:
         script_content += " --precondition_float"
 
@@ -53,6 +53,7 @@ def main():
     parser.add_argument('--param', type=str, default='default', help='Path to the parameter file')
     parser.add_argument('--dim', type=int, default=3, help='Dimension of the problem')
     parser.add_argument("--precon_float", action='store_true', help="Perform precondition in float precision")
+    parser.add_argument('--executable', type=str, default='./tests/tp_01.release/tp_01.release', help='Path to the executable')
     args = parser.parse_args()
     generate_slurm_script(args)
 

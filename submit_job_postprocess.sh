@@ -10,7 +10,8 @@ submit_job() {
     local partition=$3
     local limit=$4
     local precondition_float=$5
-    local script_file=$(python job_generator.py --job $job_name --nodes $n_nodes --part $partition --lim $limit --param $param_file --dim 3 $precondition_float)
+    local executable=$6
+    local script_file=$(python job_generator.py --executable $executable --job $job_name --nodes $n_nodes --part $partition --lim $limit --param $param_file --dim 3 $precondition_float)
     script_files+=(script_file)
     # Submit job and capture job ID
     local sbatch_output=$(sbatch "$script_file")

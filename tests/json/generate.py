@@ -9,8 +9,10 @@ def generate_hash(ds):
     hash_object.update(json_string)
     return hash_object.hexdigest()
 
+
+
 def run_instance(options, subdivisions, source_point, lower_left, upper_right):
-    with open(os.path.dirname(os.path.abspath(__file__)) + "/practical01.json", 'r') as f:
+    with open(os.path.dirname(os.path.abspath(__file__)) + "/" + options.baseFile, 'r') as f:
        datastore = json.load(f)
 
     datastore["doOutput"] = options.doOutput
@@ -39,7 +41,7 @@ def run_instance(options, subdivisions, source_point, lower_left, upper_right):
     datastore["hyperRectUpperRight"] = upper_right
     datastore["smoothingDegree"] = options.smoothingDegree
     datastore["smoothingSteps"] = options.smoothingSteps;
-    datastore["estimateRelaxation"] = options.estimateRelaxation
+    datastore["relaxation"] = options.relaxation
     datastore["coarseGridSmootherType"] = options.coarseGridSmootherType
     datastore["coarseGridMaxiter"] = options.coarseGridMaxiter
     datastore["coarseGridAbstol"] = options.coarseGridAbstol
@@ -57,6 +59,7 @@ def run_instance(options, subdivisions, source_point, lower_left, upper_right):
 
 def parseArguments():
     parser = ArgumentParser(description="Submit a simulation as a batch job")
+    parser.add_argument("--baseFile", default="practical01.json");
     parser.add_argument("--testName", default="input");
     parser.add_argument("--dim", type=int, default=3);
     parser.add_argument("--doOutput", action="store_true");
@@ -81,42 +84,48 @@ def parseArguments():
     parser.add_argument("--endTime", type=float, default=1.0);
     parser.add_argument("--smoothingDegree", type=int, default=5);
     parser.add_argument("--smoothingSteps", type=int, default=1);
-    parser.add_argument("--estimateRelaxation", action="store_true");
+    parser.add_argument("--relaxation", type=float, default=0.0);
     parser.add_argument("--coarseGridSmootherType", default="Smoother");
     parser.add_argument("--coarseGridMaxiter", type=int, default=10);
     parser.add_argument("--coarseGridAbstol", type=float, default=1.e-20);
     parser.add_argument("--coarseGridReltol", type=float, default=1.e-4);
     parser.add_argument("--restrictIsTransposeProlongate", action="store_true");
     parser.add_argument("--variable", action="store_true");
+    parser.add_argument("--colorizeBoundary", action="store_true");
 
     arguments = parser.parse_args()
     return arguments
 
 def main():
     options = parseArguments()
-
-    if options.dim==3:
-        if not options.spaceTimeConvergenceTest:
-            subdivisions="5,5,5"
-            source_point="0.0,0.0,0.0"
-            lower_left="-1.0,-1.0,-1.0"
-            upper_right="1.0,1.0,1.0"
-        else:
-            subdivisions="1,1,1"
-            source_point="0.0,0.0,0.0"
-            lower_left="0.0,0.0,0.0"
-            upper_right="1.0,1.0,1.0"
+    if options.problemType =="stokes":
+        subdivisions="1,1,1"
+        source_point="0.0,0.0,0.0"
+        lower_left="0.0,0.0,0.0"
+        upper_right="1.0,1.0,1.0"
     else:
-        if not options.spaceTimeConvergenceTest:
-            subdivisions="5,5"
-            source_point="0.0,0.0"
-            lower_left="-1.0,-1.0"
-            upper_right="1.0,1.0"
+        if options.dim==3:
+            if not options.spaceTimeConvergenceTest:
+                subdivisions="5,5,5"
+                source_point="0.0,0.0,0.0"
+                lower_left="-1.0,-1.0,-1.0"
+                upper_right="1.0,1.0,1.0"
+            else:
+                subdivisions="1,1,1"
+                source_point="0.0,0.0,0.0"
+                lower_left="0.0,0.0,0.0"
+                upper_right="1.0,1.0,1.0"
         else:
-            subdivisions="1,1"
-            source_point="0.0,0.0"
-            lower_left="0.0,0.0"
-            upper_right="1.0,1.0"
+            if not options.spaceTimeConvergenceTest:
+                subdivisions="5,5"
+                source_point="0.0,0.0"
+                lower_left="-1.0,-1.0"
+                upper_right="1.0,1.0"
+            else:
+                subdivisions="1,1"
+                source_point="0.0,0.0"
+                lower_left="0.0,0.0"
+                upper_right="1.0,1.0"
 
     initial_refinement=options.refinement
     run_instance(options, subdivisions, source_point, lower_left, upper_right)

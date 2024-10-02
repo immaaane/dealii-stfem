@@ -732,11 +732,19 @@ test(dealii::ConditionalOStream &pcout,
     matrix->initialize_dof_vector(prev_x.block(1), 1);
 
     // Point eval
-    auto real_points =
-      dim == 2 ?
-        std::vector<Point<dim, Number>>{{0.15, 0.2}, {0.25, 0.2}} :
-        std::vector<Point<dim, Number>>{{0.15, 0.2, 0.2}, {0.25, 0.2, 0.2}};
-
+    std::vector<Point<dim, Number>> real_points;
+    if (dim == 2)
+      if (parameters.grid_descriptor == "dfgBenchmark")
+        real_points = {{0.15, 0.2}, {0.25, 0.2}};
+      else
+        real_points = {{0.875, 0.125}, {0.875, 0.875}};
+    else
+      {
+        if (parameters.grid_descriptor == "dfgBenchmark")
+          real_points = {{0.15, 0.2, 0.205}, {0.25, 0.2, 0.205}};
+        else
+          real_points = {{0.875, 0.125, 0.125}, {0.875, 0.875, 0.875}};
+      }
     Utilities::MPI::RemotePointEvaluation<dim, dim> rpe;
     rpe.reinit(real_points, tria, mapping);
     unsigned int i_eval_f          = 0;

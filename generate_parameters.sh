@@ -16,7 +16,7 @@ generate_convergence_parameters() {
     local printTiming="--printTiming"
     local spaceTimeMg="--spaceTimeMg"
     local rIsTransposeP="--restrictIsTransposeProlongate"
-    local estRelax="--estimateRelaxation"
+    local estRelax="--relaxation 0.0"
     # Define problems and their respective time types
     for s in $sms; do
         for problem in $problems; do
@@ -48,7 +48,7 @@ generate_practical_parameters() {
     local printTiming="--printTiming"
     local spaceTimeMg="--spaceTimeMg"
     local rIsTransposeP="--restrictIsTransposeProlongate"
-    local estRelax="--estimateRelaxation"
+    local estRelax="--relaxation 0.0"
     # Define problems and their respective time types
     for s in $sms; do
         for problem in $problems; do
@@ -61,6 +61,45 @@ generate_practical_parameters() {
                     testName="tests/json/practical${testNameSuffix}_${problem}_${timeType}"
 		                filename=$(python tests/json/generate.py --testName $testName --endTime $T --dim $dim $printTiming $spaceTimeMg $rIsTransposeP $estRelax --timeType $timeType --problemType $problem --nDegCycles $nDegCycles --nRefCycles $nRefCycles --distortCoeff $distortC --feDegree 2  --smoothingSteps $s --refinement 5)
 		    filenames_p+=($filename)
+                done
+            done
+        done
+    done
+}
+
+
+generate_practical_stokes_parameters() {
+    local base_files="$1"
+    local types="$2"
+    local distortCoeffs="$3"
+    local sms="$4"
+    local nRef="$5"
+    local dim=3
+    local nDegCycles=3
+    local T=8
+    local nRefCycles=3
+    local doOutput="--doOutput"
+    local extrapolate="--extrapolate"
+    local printTiming="--printTiming"
+    local spaceTimeMg="--spaceTimeMg"
+    local rIsTransposeP="--restrictIsTransposeProlongate"
+    local estRelax="--relaxation 0.0"
+    local colorizeBd="--colorizeBoundary"
+    local stokes="--problemType stokes"
+    local degMin="--feDegreeMin 1"
+    local ntspMin="--nTimestepsAtOnceMin 1"
+    # Define problems and their respective time types
+    for s in $sms; do
+        for problem in $base_files; do
+            for timeType in $types; do
+                for distortC in $distortCoeffs; do
+                    testNameSuffix=""
+                    if [[ $distortC != "0.0" ]]; then
+                        testNameSuffix="_rough"
+                    fi
+                    testName="tests/json/practical${testNameSuffix}_${problem}_${timeType}"
+                    filename=$(python tests/json/generate.py --testName $testName --endTime $T --dim $dim $ntspMin $degMin $stokes $extrapolate $colorizeBd $printTiming $spaceTimeMg $rIsTransposeP $estRelax --timeType $timeType --baseFile $problem --nDegCycles $nDegCycles --nRefCycles $nRefCycles --distortCoeff $distortC --feDegree 2  --smoothingSteps $s --refinement $nRef)
+                    filenames_p+=($filename)
                 done
             done
         done
