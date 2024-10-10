@@ -27,7 +27,7 @@ def generate_slurm_script(args):
 # commands to be executed
 srun  --mpi=pmix {args.executable} --file {args.param} --dim {args.dim}"""
     if args.precon_float:
-        script_content += " --precondition_float"
+        script_content += " --precondition_float 1"
 
     script_content += "\n"
     with open(args.param, 'r') as f:

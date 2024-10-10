@@ -6,7 +6,7 @@
 #include <deal.II/lac/solver_control.h>
 #include <deal.II/lac/solver_gmres.h>
 
-#include "gmg.h"
+#include "stmg.h"
 #include "operators.h"
 #include "types.h"
 

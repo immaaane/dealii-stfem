@@ -1,5 +1,6 @@
 #include <deal.II/grid/grid_generator.h>
 
+#include "stmg.h"
 #include "stokes.h"
 #include "types.h"
 namespace dealii

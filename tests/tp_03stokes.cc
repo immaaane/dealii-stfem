@@ -16,13 +16,13 @@
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/matrix_creator.h>
 
-#include "include/exact_solution.h"
-#include "include/fe_time.h"
-#include "include/getopt++.h"
-#include "include/gmg.h"
-#include "include/grids.h"
-#include "include/operators.h"
-#include "include/time_integrators.h"
+#include "exact_solution.h"
+#include "fe_time.h"
+#include "getopt++.h"
+#include "grids.h"
+#include "operators.h"
+#include "stmg.h"
+#include "time_integrators.h"
 
 // #define CHECK_COMPUTE_SYSTEM_MATRIX
 // #define MATRIX_BASED
@@ -278,7 +278,7 @@ test(dealii::ConditionalOStream &pcout,
                            fe_degree_min,
                            parameters.poly_coarsening);
     auto poly_mg_sequence_space =
-      get_poly_mg_sequence(fe_degree,
+      get_poly_mg_sequence(fe_u.tensor_degree(),
                            parameters.fe_degree_min_space,
                            parameters.poly_coarsening);
 
@@ -297,13 +297,13 @@ test(dealii::ConditionalOStream &pcout,
     if (stokes_parameters.dg_pressure)
       fe_pmg = get_fe_pmg_sequence<dim>(poly_mg_sequence_space,
                                         {{dim, 1}},
-                                        FE_Q<dim>(fe_degree + 1),
-                                        FE_DGP<dim>(fe_degree));
+                                        FE_Q<dim>(fe_u.tensor_degree()),
+                                        FE_DGP<dim>(fe_p->tensor_degree()));
     else
       fe_pmg = get_fe_pmg_sequence<dim>(poly_mg_sequence_space,
                                         {{dim, 1}},
-                                        FE_Q<dim>(fe_degree + 1),
-                                        FE_Q<dim>(fe_degree));
+                                        FE_Q<dim>(fe_u.tensor_degree()),
+                                        FE_Q<dim>(fe_p->tensor_degree()));
 
     mg_triangulations =
       get_space_time_triangulation(mg_type_level, mg_triangulations);

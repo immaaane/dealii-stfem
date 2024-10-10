@@ -18,12 +18,12 @@
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/matrix_creator.h>
 
-#include "include/exact_solution.h"
-#include "include/fe_time.h"
-#include "include/getopt++.h"
-#include "include/gmg.h"
-#include "include/operators.h"
-#include "include/time_integrators.h"
+#include "exact_solution.h"
+#include "fe_time.h"
+#include "getopt++.h"
+#include "stmg.h"
+#include "operators.h"
+#include "time_integrators.h"
 
 using namespace dealii;
 using dealii::numbers::PI;
