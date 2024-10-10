@@ -278,7 +278,7 @@ test(dealii::ConditionalOStream &pcout,
                            fe_degree_min,
                            parameters.poly_coarsening);
     auto poly_mg_sequence_space =
-      get_poly_mg_sequence(fe_u.tensor_degree(),
+      get_poly_mg_sequence(fe_degree,
                            parameters.fe_degree_min_space,
                            parameters.poly_coarsening);
 

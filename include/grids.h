@@ -104,7 +104,7 @@ namespace dealii
         parameters.colorize_boundary);
     else if (parameters.grid_descriptor == "dfgBenchmark")
       {
-        GridGenerator::channel_with_cylinder(tria, 0.045, 3, 1.0, true);
+        GridGenerator::channel_with_cylinder(tria, 0.025, 1, 1.0, true);
       }
     else if (parameters.grid_descriptor == "bendingPipe")
       {

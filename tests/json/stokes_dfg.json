@@ -2,9 +2,11 @@
     "computeDragLift"        : "true",
     "rho"                    : "1",
     "characteristicDiam"     : "0.1",
-    "uMean"                  : "1.0",
+    "uMean"                  : "0.2",
     "meanPressure"           : "false",
     "viscosity"              : "1.e-3",
     "dfgBenchmark"           : "3",
-    "dGPressure"             : "true"
+    "dGPressure"             : "true",
+    "penalty1"               : "20",
+    "penalty2"               : "10"
 }
