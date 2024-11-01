@@ -2,6 +2,8 @@
 // Copyright (C) 2024 by Nils Margenberg and Peter Munch
 
 #pragma once
+#include <deal.II/base/types.h>
+
 #include <deal.II/lac/block_sparsity_pattern.h>
 #include <deal.II/lac/la_parallel_block_vector.h>
 #include <deal.II/lac/la_parallel_vector.h>
@@ -31,6 +33,8 @@ template <typename Number>
 using MutableBlockVectorSliceT =
   std::vector<std::reference_wrapper<VectorT<Number>>>;
 
+constexpr dealii::types::manifold_id cylindrical_manifold_id = 0;
+constexpr dealii::types::manifold_id tfi_manifold_id         = 1;
 
 enum class ProblemType : unsigned int
 {

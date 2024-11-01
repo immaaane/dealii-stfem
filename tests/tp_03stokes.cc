@@ -106,6 +106,8 @@ test(dealii::ConditionalOStream &pcout,
 
     double viscosity = stokes_parameters.viscosity;
     tria.refine_global(refinement);
+    if (parameters.grid_descriptor != "hyperRectangle")
+      tria.reset_manifold(tfi_manifold_id);
     spc_step = GridTools::minimal_cell_diameter(tria) / std::sqrt(dim);
     if (parameters.distort_grid != 0.0)
       GridTools::distort_random(parameters.distort_grid, tria);
@@ -263,11 +265,8 @@ test(dealii::ConditionalOStream &pcout,
     /// GMG
     RepartitioningPolicyTools::DefaultPolicy<dim>          policy(true);
     std::vector<std::shared_ptr<const Triangulation<dim>>> mg_triangulations =
-      parameters.grid_descriptor != "hyperRectangle" ?
-        MGTransferGlobalCoarseningTools::create_geometric_coarsening_sequence(
-          tria) :
-        MGTransferGlobalCoarseningTools::create_geometric_coarsening_sequence(
-          tria, policy);
+      MGTransferGlobalCoarseningTools::create_geometric_coarsening_sequence(
+        tria, policy);
     unsigned int fe_degree_min =
       space_time_mg ? parameters.fe_degree_min : fe_degree;
     unsigned int n_timesteps_min =

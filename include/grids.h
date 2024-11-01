@@ -1,4 +1,5 @@
 #include <deal.II/grid/grid_generator.h>
+#include <deal.II/grid/manifold_lib.h>
 
 #include "stmg.h"
 #include "stokes.h"
@@ -104,7 +105,50 @@ namespace dealii
         parameters.colorize_boundary);
     else if (parameters.grid_descriptor == "dfgBenchmark")
       {
-        GridGenerator::channel_with_cylinder(tria, 0.025, 1, 1.0, true);
+        if constexpr (dim == 2)
+          GridGenerator::channel_with_cylinder(tria, 0.025, 1, 1.0, true);
+        else
+          {
+            dealii::Triangulation<3> tmp;
+            GridGenerator::channel_with_cylinder(tmp, 0.025, 1, 1.0, true);
+            tmp.reset_all_manifolds();
+            Tensor<1, 3> shift;
+            shift[0] = 0.3;
+            GridTools::shift(shift, tmp);
+            Triangulation<3> front_tria;
+            GridGenerator::subdivided_hyper_rectangle(front_tria,
+                                                      {3u, 4u, 4u},
+                                                      Point<3>(0.0, 0.0, 0.0),
+                                                      Point<3>(0.3,
+                                                               0.41,
+                                                               0.41));
+            GridGenerator::merge_triangulations(
+              front_tria, tmp, tria, 1.e-3, true, false);
+            const Point<3>     axial_point(0.5, 0.2, 0.0);
+            const Tensor<1, 3> direction{{0.0, 0.0, 1.0}};
+            tria.set_manifold(cylindrical_manifold_id, FlatManifold<3>());
+            tria.set_manifold(tfi_manifold_id, FlatManifold<3>());
+            const CylindricalManifold<3>        cylindrical_manifold(direction,
+                                                              axial_point);
+            TransfiniteInterpolationManifold<3> inner_manifold;
+            inner_manifold.initialize(tria);
+            tria.set_manifold(cylindrical_manifold_id, cylindrical_manifold);
+            tria.set_manifold(tfi_manifold_id, inner_manifold);
+
+            for (const auto &face : tria.active_face_iterators())
+              if (face->at_boundary())
+                {
+                  auto const &center = face->center();
+                  if (std::abs(center[0] - 0.0) < 1e-8)
+                    face->set_boundary_id(0);
+                  else if (std::abs(center[0] - 2.5) < 1e-8)
+                    face->set_boundary_id(1);
+                  else if (face->manifold_id() == cylindrical_manifold_id)
+                    face->set_boundary_id(2);
+                  else
+                    face->set_boundary_id(3);
+                }
+          }
       }
     else if (parameters.grid_descriptor == "bendingPipe")
       {
