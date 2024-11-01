@@ -75,9 +75,9 @@ generate_practical_stokes_parameters() {
     local sms="$4"
     local nRef="$5"
     local dim=3
-    local nDegCycles=3
+    local nDegCycles=2
     local T=8
-    local nRefCycles=3
+    local nRefCycles=2
     local doOutput="--doOutput"
     local extrapolate="--extrapolate"
     local printTiming="--printTiming"
