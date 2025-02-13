@@ -37,24 +37,18 @@ enum class MGType : char
 namespace dealii
 {
 
-  inline bool
-  is_space_lvl(MGType mg)
-  {
-    return mg == MGType::h || mg == MGType::p;
-  };
-  inline bool
-  is_time_lvl(MGType mg)
-  {
-    return mg == MGType::tau || mg == MGType::k;
-  };
+  bool
+  is_space_lvl(MGType mg);
+  bool
+  is_time_lvl(MGType mg);
 
   template <typename Number>
   std::array<FullMatrix<Number>, 3>
-  get_dg_weights(unsigned int const r);
+  get_dg_weights(unsigned int const r, double const delta0 = 0.0);
 
   template <typename Number>
   std::array<FullMatrix<Number>, 2>
-  get_cg_weights(unsigned int const r);
+  get_cg_weights(unsigned int const r, double const delta0 = 0.0);
 
   // version in deal.II only goes to 1
   unsigned int
@@ -62,42 +56,15 @@ namespace dealii
     const unsigned int previous_fe_degree,
     const MGTransferGlobalCoarseningTools::PolynomialCoarseningSequenceType
                 &p_sequence,
-    unsigned int k_min = 0u)
-  {
-    switch (p_sequence)
-      {
-        case MGTransferGlobalCoarseningTools::PolynomialCoarseningSequenceType::
-          bisect:
-          return std::max(previous_fe_degree / 2, 0u);
-        case MGTransferGlobalCoarseningTools::PolynomialCoarseningSequenceType::
-          decrease_by_one:
-          return std::max(previous_fe_degree - 1, 0u);
-        case MGTransferGlobalCoarseningTools::PolynomialCoarseningSequenceType::
-          go_to_one:
-          return k_min;
-        default:
-          DEAL_II_NOT_IMPLEMENTED();
-          return 0u;
-      }
-  }
+    unsigned int k_min = 0u);
 
-  inline std::vector<unsigned int>
+  std::vector<unsigned int>
   get_poly_mg_sequence(
     unsigned int const k_max,
     unsigned int const k_min,
     MGTransferGlobalCoarseningTools::PolynomialCoarseningSequenceType const
-      p_seq)
-  {
-    std::vector<unsigned int> degrees{k_max};
-    if (degrees.back() == k_min)
-      return degrees;
-    while (degrees.back() > k_min)
-      degrees.push_back(dealii::create_next_polynomial_coarsening_degree(
-        degrees.back(), p_seq, k_min));
+      p_seq);
 
-    std::reverse(degrees.begin(), degrees.end());
-    return degrees;
-  }
   template <int dim, typename... fe_types>
   std::vector<std::vector<std::unique_ptr<FiniteElement<dim>>>>
   get_fe_pmg_sequence(
@@ -139,7 +106,7 @@ namespace dealii
     return fe_pmg;
   }
 
-  inline std::vector<MGType>
+  std::vector<MGType>
   get_mg_sequence(
     unsigned int              n_sp_lvl,
     std::vector<unsigned int> k_seq,
@@ -150,85 +117,15 @@ namespace dealii
     CoarseningType            coarsening_type = CoarseningType::space_and_time,
     bool                      time_before_space     = false,
     bool                      use_p_multigrid_space = false,
-    bool                      zip_from_back         = true)
-  {
-    Assert(n_sp_lvl >= 1, ExcLowerRange(n_sp_lvl, 1));
-    Assert(k_seq.size() >= 1, ExcLowerRange(k_seq.size(), 1));
-    unsigned int n_k_lvl = k_seq.size() - 1;
-    unsigned int n_t_lvl = log2(n_timesteps_at_once / n_timesteps_at_once_min);
-    MGType       upper_lvl = (lower_lvl == MGType::k) ? MGType::tau : MGType::k;
-    MGType       lower_lvl_s = (lower_lvl == MGType::k) ? MGType::p : MGType::h;
-    MGType       upper_lvl_s = (lower_lvl == MGType::k) ? MGType::h : MGType::p;
-    unsigned int n_ll        = (lower_lvl == MGType::k) ? n_k_lvl : n_t_lvl;
-    unsigned int n_ul        = (lower_lvl == MGType::k) ? n_t_lvl : n_k_lvl;
-    unsigned int n_p_lvl     = (use_p_multigrid_space) ? p_seq.size() - 1 : 0;
-    unsigned int n_ll_s = (lower_lvl == MGType::k) ? n_p_lvl : n_sp_lvl - 1;
-    unsigned int n_ul_s = (lower_lvl == MGType::k) ? n_sp_lvl - 1 : n_p_lvl;
-    std::vector<MGType> time_levels(n_ll, lower_lvl);
-    time_levels.insert(time_levels.end(), n_ul, upper_lvl);
-    std::vector<MGType> space_levels(n_ll_s, lower_lvl_s);
-    space_levels.insert(space_levels.end(), n_ul_s, upper_lvl_s);
-    std::vector<MGType> mg_type_level;
-    auto append_levels = [&](const auto &first, const auto &second) {
-      mg_type_level.insert(mg_type_level.end(), first.begin(), first.end());
-      mg_type_level.insert(mg_type_level.end(), second.begin(), second.end());
-    };
-    auto append_levels_reverse = [&](const auto &first, const auto &second) {
-      mg_type_level.insert(mg_type_level.end(), first.rbegin(), first.rend());
-      mg_type_level.insert(mg_type_level.end(), second.rbegin(), second.rend());
-    };
-    if (coarsening_type == CoarseningType::space_or_time)
-      if (zip_from_back)
-        append_levels_reverse(time_before_space ? time_levels : space_levels,
-                              time_before_space ? space_levels : time_levels);
-      else
-        append_levels(time_before_space ? time_levels : space_levels,
-                      time_before_space ? space_levels : time_levels);
-    else
-      {
-        size_t time_size = time_levels.size(), space_size = space_levels.size();
-        size_t max_levels = std::max(time_size, space_size);
-        auto   get_index =
-          [&](const std::vector<MGType> &levels, size_t i, bool reverse) {
-            return reverse ? levels[levels.size() - 1 - i] : levels[i];
-          };
-        for (size_t i = 0; i < max_levels; ++i)
-          {
-            if (i < (time_before_space ? time_size : space_size))
-              mg_type_level.push_back(
-                get_index(time_before_space ? time_levels : space_levels,
-                          i,
-                          zip_from_back));
-            if (i < (time_before_space ? space_size : time_size))
-              mg_type_level.push_back(
-                get_index(time_before_space ? space_levels : time_levels,
-                          i,
-                          zip_from_back));
-          }
-        if (zip_from_back)
-          std::reverse(mg_type_level.begin(), mg_type_level.end());
-      }
-    return mg_type_level;
-  }
+    bool                      zip_from_back         = true);
 
-  inline std::vector<size_t>
-  get_precondition_stmg_types(std::vector<MGType> const &mg_type_level,
-                              CoarseningType             coarsening_type,
-                              bool                       time_before_space,
-                              [[maybe_unused]] bool      zip_from_back)
-  {
-    std::vector<size_t> ret(mg_type_level.size() + 1, 1);
-    if (coarsening_type == CoarseningType::space_or_time)
-      return ret;
-    for (size_t i = 0; i < mg_type_level.size() - 1; ++i)
-      // maybe replace by time_before_space == zip_from_back
-      if (time_before_space ?
-            is_space_lvl(mg_type_level[i]) &&
-              is_time_lvl(mg_type_level[i + 1]) :
-            is_time_lvl(mg_type_level[i]) && is_space_lvl(mg_type_level[i + 1]))
-        ret[i] = 1, ret[i + 1] = 0, ++i;
-    return ret;
-  }
+  std::vector<unsigned int>
+  get_precondition_stmg_types(
+    std::vector<MGType> const &mg_type_level,
+    CoarseningType             coarsening_type,
+    bool                       time_before_space,
+    [[maybe_unused]] bool      zip_from_back,
+    SupportedSmoothers         smoother = SupportedSmoothers::Relaxation);
 
   template <int dim>
   std::vector<std::shared_ptr<const Triangulation<dim>>>
@@ -456,17 +353,18 @@ namespace dealii
   get_fe_time_weights(TimeStepType       type,
                       unsigned int const r,
                       double             time_step_size,
-                      unsigned int       n_timesteps_at_once = 1)
+                      unsigned int       n_timesteps_at_once = 1,
+                      double             delta0              = 0.0)
   {
     std::array<FullMatrix<Number>, 4> tmp;
     if (type == TimeStepType::CGP)
       {
-        tmp = split_lhs_rhs(get_cg_weights<Number>(r));
+        tmp = split_lhs_rhs(get_cg_weights<Number>(r, delta0));
         tmp[2] *= time_step_size;
       }
     else if (type == TimeStepType::DG)
       {
-        tmp    = split_lhs_rhs(get_dg_weights<Number>(r));
+        tmp    = split_lhs_rhs(get_dg_weights<Number>(r, delta0));
         tmp[3] = tmp[2];
         tmp[2] = 0.0;
       }
@@ -510,13 +408,15 @@ namespace dealii
     return ret;
   }
 
-  template <typename Number,
-            typename F = std::array<FullMatrix<Number>, 4> (
-                &)(TimeStepType, unsigned int const, double, unsigned int)>
+  template <
+    typename Number,
+    typename F = std::array<FullMatrix<Number>, 4> (
+        &)(TimeStepType, unsigned int const, double, unsigned int, double)>
   std::vector<std::array<FullMatrix<Number>, 4>>
   get_fe_time_weights(TimeStepType                     type,
                       double                           time_step_size,
                       unsigned int                     n_timesteps_at_once,
+                      double                           delta0,
                       std::vector<MGType> const       &mg_type_level,
                       std::vector<unsigned int> const &poly_time_sequence,
                       F const &get_fetw = get_fe_time_weights<Number>)
@@ -525,7 +425,7 @@ namespace dealii
       mg_type_level.size() + 1);
     auto tw   = time_weights.rbegin();
     auto p_mg = poly_time_sequence.rbegin();
-    *tw       = get_fetw(type, *p_mg, time_step_size, n_timesteps_at_once);
+    *tw = get_fetw(type, *p_mg, time_step_size, n_timesteps_at_once, delta0);
     ++tw;
     for (auto mgt = mg_type_level.rbegin(); mgt != mg_type_level.rend();
          ++mgt, ++tw)
@@ -534,7 +434,8 @@ namespace dealii
           ++p_mg;
         else if (*mgt == MGType::tau)
           n_timesteps_at_once /= 2, time_step_size *= 2;
-        *tw = get_fetw(type, *p_mg, time_step_size, n_timesteps_at_once);
+        *tw =
+          get_fetw(type, *p_mg, time_step_size, n_timesteps_at_once, delta0);
       }
     Assert(tw == time_weights.rend(), ExcInternalError());
     return time_weights;
@@ -545,12 +446,14 @@ namespace dealii
   get_fe_time_weights_wave(TimeStepType                     type,
                            double                           time_step_size,
                            unsigned int                     n_timesteps_at_once,
+                           double                           delta0,
                            std::vector<MGType> const       &mg_type_level,
                            std::vector<unsigned int> const &poly_time_sequence)
   {
     auto time_weights = get_fe_time_weights<Number>(type,
                                                     time_step_size,
                                                     n_timesteps_at_once,
+                                                    delta0,
                                                     mg_type_level,
                                                     poly_time_sequence);
     std::vector<std::array<FullMatrix<Number>, 5>> time_weights_wave(
@@ -571,24 +474,10 @@ namespace dealii
   }
 
   Quadrature<1>
-  get_time_quad(TimeStepType type, unsigned int const r)
-  {
-    if (type == TimeStepType::DG)
-      return QGaussRadau<1>(r + 1, QGaussRadau<1>::EndPoint::right);
-    else if (type == TimeStepType::CGP)
-      return QGaussLobatto<1>(r + 1);
-    else
-      return Quadrature<1>();
-  }
+  get_time_quad(TimeStepType type, unsigned int const r);
 
   std::vector<Polynomials::Polynomial<double>>
-  get_time_basis(TimeStepType type, unsigned int const r)
-  {
-    auto quad_time = get_time_quad(type, r);
-    return Polynomials::generate_complete_Lagrange_basis(
-      quad_time.get_points());
-  }
-
+  get_time_basis(TimeStepType type, unsigned int const r);
 
   /** Utility function for splitting the weights into parts belonging to the RHS
    * and LHS.
@@ -625,8 +514,135 @@ namespace dealii
   }
 
   template <typename Number>
+  FullMatrix<Number>
+  build_derivative_matrix(
+    const std::vector<Polynomials::Polynomial<double>> &basis,
+    const std::vector<Point<1>>                        &old_points)
+  {
+    const unsigned     n = basis.size();
+    FullMatrix<Number> D(n, n);
+    for (unsigned i = 0; i < n; ++i)
+      for (unsigned j = 0; j < n; ++j)
+        D(i, j) = basis[j].value(old_points[i][0]);
+    return D;
+  }
+
+  template <typename Number>
+  FullMatrix<Number>
+  construct_extrapolation_matrix(TimeStepType type,
+                                 unsigned int r,
+                                 double       shift,
+                                 double       gradient_penalty,
+                                 double       filter_strength,
+                                 bool         extrapolate_constant = false)
+  {
+    auto old_n_dofs = type == TimeStepType::DG ? r + 2 : r + 1;
+    if (extrapolate_constant)
+      {
+        auto               new_n_dofs = type == TimeStepType::DG ? r + 1 : r;
+        FullMatrix<double> M_extrapolate(new_n_dofs, old_n_dofs);
+        for (auto i = 0u; i < new_n_dofs; ++i)
+          M_extrapolate(i, old_n_dofs - 1) = 1.;
+        return M_extrapolate;
+      }
+
+    auto new_basis  = get_time_basis(type, r);
+    auto new_points = get_time_quad(type, r).get_points();
+
+    std::vector<Point<1>> old_points;
+    if (type == TimeStepType::DG)
+      {
+        old_points.push_back(Point<1>(0.0));
+        auto points_ = get_time_quad(type, r).get_points();
+        old_points.insert(old_points.end(), points_.begin(), points_.end());
+      }
+    else
+      old_points = get_time_quad(type, r).get_points();
+    auto old_basis = Polynomials::generate_complete_Lagrange_basis(old_points);
+    auto transform = [shift](double x) { return x + shift; };
+    FullMatrix<double> M_interpolate(r + 1, old_n_dofs);
+    for (unsigned i = 0; i < r + 1; ++i)
+      {
+        double x_trans = transform(new_points[i][0]);
+        for (unsigned j = 0; j < old_n_dofs; ++j)
+          M_interpolate(i, j) = old_basis[j].value(x_trans);
+      }
+
+    FullMatrix<double> M_new_basis(r + 1, r + 1);
+    for (unsigned i = 0; i < r + 1; ++i)
+      {
+        double x_new = new_points[i][0];
+        for (unsigned j = 0; j < r + 1; ++j)
+          M_new_basis(i, j) = new_basis[j].value(x_new);
+      }
+    FullMatrix<double> M_new_basis_inv = M_new_basis;
+    M_new_basis_inv.invert(M_new_basis_inv);
+    FullMatrix<double> M_extrapolate(r + 1, old_n_dofs);
+    M_new_basis_inv.mmult(M_extrapolate, M_interpolate);
+
+
+    std::vector<Polynomials::Polynomial<double>> poly_derivative(
+      new_basis.size());
+    for (unsigned int i = 0; i < new_basis.size(); ++i)
+      poly_derivative[i] = new_basis[i].derivative();
+
+    auto D = build_derivative_matrix<Number>(poly_derivative, old_points);
+    FullMatrix<Number> D_transpose(r + 1, r + 1);
+    D_transpose.copy_transposed(D);
+    FullMatrix<Number> DTD(r + 1, r + 1);
+    D_transpose.mmult(DTD, D);
+    FullMatrix<Number> G = IdentityMatrix(r + 1);
+    for (unsigned i = 0; i <= r; ++i)
+      for (unsigned j = 0; j <= r; ++j)
+        G(i, j) += gradient_penalty * DTD(i, j);
+    FullMatrix<Number> F(r + 1, r + 1);
+    F = 0.0;
+    for (unsigned i = 0; i <= r; ++i)
+      F(i, i) = 1.0 / (1.0 + filter_strength * i * i);
+
+    {
+      FullMatrix<Number> temp(r + 1, old_n_dofs);
+      G.mmult(temp, M_extrapolate);
+      F.mmult(M_extrapolate, temp);
+    }
+
+    if (type == TimeStepType::DG)
+      return M_extrapolate;
+
+    FullMatrix<Number> M_extrapolate_cg(M_extrapolate.m() - 1,
+                                        M_extrapolate.n());
+    M_extrapolate_cg.fill(M_extrapolate, 0, 0, 1, 0);
+    return M_extrapolate_cg;
+  }
+
+  template <typename Number>
+  FullMatrix<Number>
+  get_extrapolation_matrix(TimeStepType           type,
+                           NonlinearExtrapolation nonlinear_extra,
+                           unsigned int           r,
+                           double                 shift,
+                           double                 gradient_penalty,
+                           double                 filter_strength)
+  {
+    FullMatrix<Number> extrapolation;
+    if (nonlinear_extra == NonlinearExtrapolation::Auto)
+      {
+        extrapolation = construct_extrapolation_matrix<Number>(
+          type, r, shift, gradient_penalty, filter_strength, (r <= 1u));
+      }
+    else if (nonlinear_extra == NonlinearExtrapolation::Constant)
+      extrapolation = construct_extrapolation_matrix<Number>(
+        type, r, shift, gradient_penalty, filter_strength, true);
+    else if (nonlinear_extra == NonlinearExtrapolation::Polynomial)
+      extrapolation = construct_extrapolation_matrix<Number>(
+        type, r, shift, gradient_penalty, filter_strength, false);
+
+    return extrapolation;
+  }
+
+  template <typename Number>
   std::array<FullMatrix<Number>, 2>
-  get_cg_weights(unsigned int const r)
+  get_cg_weights(unsigned int const r, double const)
   {
     static std::unordered_map<unsigned int, std::array<FullMatrix<Number>, 2>>
       cache;
@@ -647,6 +663,13 @@ namespace dealii
     for (unsigned int i = 0; i < poly_lobatto.size(); ++i)
       poly_lobatto_derivative[i] = poly_lobatto[i].derivative();
 
+    std::vector<Polynomials::Polynomial<double>> poly_test_derivative(
+      poly_test.size());
+
+    for (unsigned int i = 0; i < poly_test_derivative.size(); ++i)
+      poly_test_derivative[i] = poly_test[i].derivative();
+
+
     QGauss<1> const    quad(r + 2);
     FullMatrix<Number> matrix(r, r + 1);
     FullMatrix<Number> matrix_der(r, r + 1);
@@ -662,18 +685,19 @@ namespace dealii
 
     for (unsigned int i = 0; i < r; ++i)
       for (unsigned int j = 0; j < r + 1; ++j)
-        for (unsigned int q = 0; q < quad.size(); ++q)
-          matrix_der(i, j) +=
-            quad.weight(q) * poly_test[i].value(quad.point(q)[0]) *
-            poly_lobatto_derivative[j].value(quad.point(q)[0]);
-
+        {
+          for (unsigned int q = 0; q < quad.size(); ++q)
+            matrix_der(i, j) +=
+              quad.weight(q) * poly_test[i].value(quad.point(q)[0]) *
+              poly_lobatto_derivative[j].value(quad.point(q)[0]);
+        }
     cache[r] = {{matrix, matrix_der}};
     return cache[r];
   }
 
   template <typename Number>
   std::array<FullMatrix<Number>, 3>
-  get_dg_weights(unsigned int const r)
+  get_dg_weights(unsigned int const r, double const)
   {
     static std::unordered_map<unsigned int, std::array<FullMatrix<Number>, 3>>
       cache;
@@ -681,12 +705,11 @@ namespace dealii
       return it->second;
 
     // Radau quadrature
-    auto const poly_radau = get_time_basis(TimeStepType::DG, r);
+    auto const poly = get_time_basis(TimeStepType::DG, r);
 
-    std::vector<Polynomials::Polynomial<double>> poly_radau_derivative(
-      poly_radau.size());
-    for (unsigned int i = 0; i < poly_radau.size(); ++i)
-      poly_radau_derivative[i] = poly_radau[i].derivative();
+    std::vector<Polynomials::Polynomial<double>> poly_derivative(poly.size());
+    for (unsigned int i = 0; i < poly.size(); ++i)
+      poly_derivative[i] = poly[i].derivative();
 
     QGauss<1> const quad(r + 2);
 
@@ -696,25 +719,24 @@ namespace dealii
 
     for (unsigned int i = 0; i < r + 1; ++i)
       {
-        jump_matrix(i, 0) = poly_radau[i].value(0.0);
+        jump_matrix(i, 0) = poly[i].value(0.0);
         for (unsigned int j = 0; j < r + 1; ++j)
           for (unsigned int q = 0; q < quad.size(); ++q)
             lhs_matrix(i, j) += quad.weight(q) *
-                                poly_radau[i].value(quad.point(q)[0]) *
-                                poly_radau[j].value(quad.point(q)[0]);
+                                poly[i].value(quad.point(q)[0]) *
+                                poly[j].value(quad.point(q)[0]);
       }
 
     for (unsigned int i = 0; i < r + 1; ++i)
       for (unsigned int j = 0; j < r + 1; ++j)
         {
           // Jump
-          lhs_matrix_der(i, j) +=
-            poly_radau[i].value(0) * poly_radau[j].value(0);
+          lhs_matrix_der(i, j) += poly[i].value(0) * poly[j].value(0);
           // Integration
           for (unsigned int q = 0; q < quad.size(); ++q)
-            lhs_matrix_der(i, j) +=
-              quad.weight(q) * poly_radau[i].value(quad.point(q)[0]) *
-              poly_radau_derivative[j].value(quad.point(q)[0]);
+            lhs_matrix_der(i, j) += quad.weight(q) *
+                                    poly[i].value(quad.point(q)[0]) *
+                                    poly_derivative[j].value(quad.point(q)[0]);
         }
 
     cache[r] = {{lhs_matrix, lhs_matrix_der, jump_matrix}};
@@ -722,14 +744,7 @@ namespace dealii
   }
 
   std::vector<size_t>
-  get_fe_q_permutation(FE_Q<1> const &fe_time)
-  {
-    size_t const        n_dofs = fe_time.n_dofs_per_cell();
-    std::vector<size_t> permutation(n_dofs, 0);
-    std::iota(permutation.begin() + 1, permutation.end() - 1, 2);
-    permutation.back() = 1;
-    return permutation;
-  }
+  get_fe_q_permutation(FE_Q<1> const &fe_time);
 
   template <typename Number = double>
   FullMatrix<Number>
@@ -917,7 +932,7 @@ namespace dealii
         cache[i] = decompose(i);
     }
 
-    static void
+    static inline void
     set_variable_major(bool is_variable_major_)
     { // allow setting once
       if (!is_variable_major_set)
@@ -925,7 +940,7 @@ namespace dealii
       is_variable_major_set = true;
     }
 
-    static bool
+    static inline bool
     get_variable_major()
     {
       return is_variable_major;
@@ -997,12 +1012,9 @@ namespace dealii
     unsigned int n_timesteps_at_once_, n_variables_, n_timedofs_;
     std::vector<std::array<unsigned int, 3>> cache;
 
-    static bool is_variable_major;
-    static bool is_variable_major_set;
+    static inline bool is_variable_major     = true;
+    static inline bool is_variable_major_set = false;
   };
-
-  bool block_indexing::is_variable_major     = true;
-  bool block_indexing::is_variable_major_set = false;
 
   class BlockSlice
   {
@@ -1098,6 +1110,38 @@ namespace dealii
 
     template <typename Number>
     BlockVectorSliceT<Number>
+    get_time(const BlockVectorT<Number> &block_vector,
+             const BlockVectorT<Number> &prev_vector,
+             unsigned int                variable) const
+    {
+      AssertDimension(prev_vector.n_blocks(), this->n_variables());
+      BlockVectorSliceT<Number> result;
+      std::vector<unsigned int> indices = get_time(variable);
+      result.reserve(indices.size() + 1);
+      result.push_back(std::cref(prev_vector.block(variable)));
+      auto result_ = get_slice(block_vector, indices);
+      result.insert(result.end(), result_.begin(), result_.end());
+      return result;
+    }
+
+    template <typename Number>
+    MutableBlockVectorSliceT<Number>
+    get_time(BlockVectorT<Number> &block_vector,
+             BlockVectorT<Number> &prev_vector,
+             unsigned int          variable) const
+    {
+      AssertDimension(prev_vector.n_blocks(), this->n_variables());
+      MutableBlockVectorSliceT<Number> result;
+      std::vector<unsigned int>        indices = get_time(variable);
+      result.reserve(indices.size() + 1);
+      result.push_back(std::ref(prev_vector.block(variable)));
+      auto result_ = get_slice(block_vector, indices);
+      result.insert(result.end(), result_.begin(), result_.end());
+      return result;
+    }
+
+    template <typename Number>
+    BlockVectorSliceT<Number>
     get_variable(const BlockVectorT<Number> &block_vector,
                  unsigned int                timestep,
                  unsigned int                timedof) const
@@ -1177,14 +1221,34 @@ namespace dealii
   };
 
   template <typename Number>
+  void
+  extrapolate_nonlinear(BlockVectorT<Number>       &x_extrapolated,
+                        FullMatrix<Number> const   &matrix,
+                        BlockSlice const           &blk_src,
+                        BlockVectorT<Number> const &x,
+                        BlockVectorT<Number> const &prev_x)
+  {
+    for (unsigned int v = 0; v < blk_src.n_variables(); ++v)
+      {
+        BlockVectorSliceT<Number>        src_v = blk_src.get_time(x, prev_x, v);
+        MutableBlockVectorSliceT<Number> dst_v =
+          blk_src.get_time(x_extrapolated, v);
+        AssertDimension(matrix.m(), dst_v.size());
+        AssertDimension(matrix.n(), src_v.size());
+        tensorproduct(dst_v, matrix, src_v);
+      }
+  }
+
+  template <typename Number>
   std::array<FullMatrix<Number>, 4>
   get_fe_time_weights_stokes(TimeStepType       type,
                              unsigned int const r,
                              double             time_step_size,
-                             unsigned int       n_timesteps_at_once = 1)
+                             unsigned int       n_timesteps_at_once = 1,
+                             double             delta0              = 0.0)
   {
-    auto tw =
-      get_fe_time_weights<Number>(type, r, time_step_size, n_timesteps_at_once);
+    auto tw = get_fe_time_weights<Number>(
+      type, r, time_step_size, n_timesteps_at_once, delta0);
     std::array<FullMatrix<Number>, 4> ret;
     for (int i = 0; i < 2; ++i)
       ret[i].reinit(tw[i].m() * 2, tw[i].n() * 2);
@@ -1216,6 +1280,46 @@ namespace dealii
           }
         if (iv == 1 && type == TimeStepType::CGP)
           tw[2].scatter_matrix_to(variable_indices, {0}, ret[2]);
+      }
+    return ret;
+  }
+
+
+  template <typename Number>
+  std::array<FullMatrix<Number>, 4>
+  get_fe_time_weights_2variable_evolutionary(
+    TimeStepType       type,
+    unsigned int const r,
+    double             time_step_size,
+    unsigned int       n_timesteps_at_once = 1,
+    double             delta0              = 0.0)
+  {
+    auto tw = get_fe_time_weights<Number>(
+      type, r, time_step_size, n_timesteps_at_once, delta0);
+    std::array<FullMatrix<Number>, 4> ret;
+    for (int i = 0; i < 2; ++i)
+      ret[i].reinit(tw[i].m() * 2, tw[i].n() * 2);
+    for (int i = 2; i < 4; ++i)
+      ret[i].reinit(tw[i].m() * 2, tw[i].n());
+    BlockSlice blk_slice(n_timesteps_at_once,
+                         2,
+                         (type == TimeStepType::DG) ? r + 1 : r);
+
+    for (int iv = 0; iv < 2; ++iv)
+      {
+        auto variable_indices       = blk_slice.get_time(iv);
+        auto other_variable_indices = blk_slice.get_time(iv == 0 ? 1 : 0);
+        AssertDimension(variable_indices.size(), tw[0].m());
+
+        // For spatial operator
+        tw[0].scatter_matrix_to(variable_indices,
+                                other_variable_indices,
+                                ret[0]);
+        // \partial_t
+        tw[1].scatter_matrix_to(variable_indices, variable_indices, ret[1]);
+        // rhs
+        for (int i = 2; i < 4; ++i)
+          tw[i].scatter_matrix_to(variable_indices, {0}, ret[i]);
       }
     return ret;
   }

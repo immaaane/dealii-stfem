@@ -2,11 +2,12 @@
 // Copyright (C) 2024 by Nils Margenberg and Peter Munch
 
 #pragma once
-#include <deal.II/base/parameter_handler.h>
+#include <deal.II/base/timer.h>
 
 #include <deal.II/dofs/dof_handler.h>
 #include <deal.II/dofs/dof_tools.h>
 
+#include <deal.II/lac/precondition.h>
 #include <deal.II/lac/solver_control.h>
 #include <deal.II/lac/solver_gmres.h>
 #include <deal.II/lac/sparse_matrix_tools.h>
@@ -22,7 +23,8 @@
 
 #include "compute_block_matrix.h"
 #include "fe_time.h"
-#include "stokes.h"
+#include "operators.h"
+#include "parameters.h"
 #include "types.h"
 
 enum class TransferType : bool
@@ -95,6 +97,16 @@ namespace dealii
           transfer[v]->restrict_and_add(dst.block(i), src.block(i));
         }
     }
+
+    void
+    interpolate(BlockVectorType &dst, const BlockVectorType &src) const
+    {
+      for (unsigned int i = 0; i < src.n_blocks(); ++i)
+        {
+          auto const &[tsp, v, td] = blk_index.decompose(i);
+          transfer[v]->interpolate(dst.block(i), src.block(i));
+        }
+    }
   };
   template <int dim, typename Number>
   using MGTwoLevelTransferSpace = MGTwoLevelBlockTransfer<dim, Number>;
@@ -107,6 +119,27 @@ namespace dealii
     BlockSlice         blk_index_lo;
     FullMatrix<Number> prolongation_matrix;
     FullMatrix<Number> restriction_matrix;
+    FullMatrix<Number> interpolate_down_matrix;
+
+    void
+    transfer(BlockVectorType          &dst,
+             BlockSlice const         &blk_dst,
+             FullMatrix<Number> const &matrix,
+             BlockVectorType const    &src,
+             BlockSlice const         &blk_src) const
+    {
+      AssertDimension(matrix.n() * blk_src.n_variables(), src.n_blocks());
+      AssertDimension(matrix.m() * blk_src.n_variables(), dst.n_blocks());
+      AssertDimension(blk_src.n_blocks(), src.n_blocks());
+      AssertDimension(blk_dst.n_blocks(), dst.n_blocks());
+      for (unsigned int v = 0; v < blk_src.n_variables(); ++v)
+        {
+          BlockVectorSliceT<Number>        src_v = blk_src.get_time(src, v);
+          MutableBlockVectorSliceT<Number> dst_v = blk_dst.get_time(dst, v);
+          tensorproduct(dst_v, matrix, src_v);
+        }
+    }
+
 
     void
     transfer_and_add(BlockVectorType          &dst,
@@ -141,8 +174,8 @@ namespace dealii
                (blk_index_hi.n_timesteps_at_once() ==
                 blk_index_lo.n_timesteps_at_once()),
              ExcInternalError());
-      bool k_mg   = mg_type == MGType::k;
-      bool tau_mg = mg_type == MGType::tau;
+      bool                  k_mg   = mg_type == MGType::k;
+      [[maybe_unused]] bool tau_mg = mg_type == MGType::tau;
 
       unsigned int r                   = (type == TimeStepType::DG) ?
                                            blk_index_hi.n_timedofs() - 1 :
@@ -152,33 +185,32 @@ namespace dealii
                                            blk_index_lo.n_timedofs();
       unsigned int n_timesteps_at_once = blk_index_hi.n_timesteps_at_once();
 
+      // Ensure that at least one of k_mg or tau_mg is true
+      Assert(k_mg != tau_mg, ExcMessage("Either k_mg or tau_mg must be true."));
       prolongation_matrix =
         k_mg ?
           get_time_projection_matrix<Number>(type,
                                              r_lo,
                                              r,
                                              n_timesteps_at_once) :
-        tau_mg ?
-          get_time_prolongation_matrix<Number>(type, r, n_timesteps_at_once) :
-          dealii::IdentityMatrix(blk_index_hi.n_timedofs() *
-                                 blk_index_hi.n_timesteps_at_once());
+          get_time_prolongation_matrix<Number>(type, r, n_timesteps_at_once);
+
+      interpolate_down_matrix =
+        k_mg ?
+          get_time_projection_matrix<Number>(type,
+                                             r,
+                                             r_lo,
+                                             n_timesteps_at_once) :
+          get_time_restriction_matrix<Number>(type, r, n_timesteps_at_once);
+
+      const auto &source_matrix = restrict_is_transpose_prolongate ?
+                                    prolongation_matrix :
+                                    interpolate_down_matrix;
+      restriction_matrix.reinit(source_matrix.n(), source_matrix.m());
       if (restrict_is_transpose_prolongate)
-        {
-          restriction_matrix.reinit(prolongation_matrix.n(),
-                                    prolongation_matrix.m());
-          restriction_matrix.copy_transposed(prolongation_matrix);
-        }
+        restriction_matrix.copy_transposed(source_matrix);
       else
-        restriction_matrix =
-          k_mg ?
-            get_time_projection_matrix<Number>(type,
-                                               r,
-                                               r_lo,
-                                               n_timesteps_at_once) :
-          tau_mg ?
-            get_time_restriction_matrix<Number>(type, r, n_timesteps_at_once) :
-            dealii::IdentityMatrix(blk_index_hi.n_timedofs() *
-                                   blk_index_hi.n_timesteps_at_once());
+        restriction_matrix.copy_from(source_matrix);
     }
 
     MGTwoLevelTransferTime(MGTwoLevelTransferTime<Number> const &other)
@@ -186,7 +218,7 @@ namespace dealii
       , blk_index_lo(other.blk_index_lo)
       , prolongation_matrix(other.prolongation_matrix)
       , restriction_matrix(other.restriction_matrix)
-
+      , interpolate_down_matrix(other.interpolate_down_matrix)
     {}
     MGTwoLevelTransferTime &
     operator=(MGTwoLevelTransferTime const &) = default;
@@ -203,6 +235,14 @@ namespace dealii
     {
       transfer_and_add(
         dst, blk_index_lo, restriction_matrix, src, blk_index_hi);
+    }
+
+    void
+    interpolate(BlockVectorType &dst, const BlockVectorType &src) const
+    {
+      Assert(dst.n_blocks() <= src.n_blocks(),
+             ExcMessage("Interpolation only from fine to coarse"));
+      transfer(dst, blk_index_lo, interpolate_down_matrix, src, blk_index_hi);
     }
   };
 
@@ -250,6 +290,13 @@ namespace dealii
     {
       std::visit([&dst, &src](
                    auto &transfer) { transfer.restrict_and_add(dst, src); },
+                 transfer_variant);
+    }
+    void
+    interpolate(BlockVectorType &dst, const BlockVectorType &src) const
+    {
+      std::visit([&dst,
+                  &src](auto &transfer) { transfer.interpolate(dst, src); },
                  transfer_variant);
     }
   };
@@ -305,6 +352,14 @@ namespace dealii
                      const BlockVectorType &src) const override final
     {
       transfer[from_level].restrict_and_add(dst, src);
+    }
+
+    void
+    interpolate(const unsigned int     from_level,
+                BlockVectorType       &dst,
+                const BlockVectorType &src) const
+    {
+      transfer[from_level].interpolate(dst, src);
     }
 
     template <typename BlockVectorType2>
@@ -578,14 +633,32 @@ namespace dealii
       const FullMatrix<Number>                              &Beta,
       std::vector<const DoFHandler<dim> *> const            &dof_handler,
       const BlockSlice                                      &blk_slice_,
-      const Table<2, bool> &K_mask = Table<2, bool>(),
-      const Table<2, bool> &M_mask = Table<2, bool>())
+      const Table<2, bool> &K_mask       = Table<2, bool>(),
+      const Table<2, bool> &M_mask       = Table<2, bool>(),
+      bool                  build_cache_ = false)
       : timer(timer)
       , blk_slice(blk_slice_)
+      , build_cache(build_cache_)
+      , SPB(SP_)
     {
-      AssertDimension(SP_->n_block_rows(), dof_handler.size());
-      std::vector<IndexSet> locally_relevant_dofs(SP_->n_block_rows());
-      BlockVectorType       valence(SP_->n_block_rows());
+      reinit(K_, M_, Alpha, Beta, dof_handler, K_mask, M_mask);
+      if (!build_cache)
+        SPB.reset();
+    }
+
+    template <int dim>
+    void
+    reinit(std::shared_ptr<const BlockSparseMatrixType> const &K_,
+           std::shared_ptr<const BlockSparseMatrixType> const &M_,
+           const FullMatrix<Number>                           &Alpha,
+           const FullMatrix<Number>                           &Beta,
+           std::vector<const DoFHandler<dim> *> const         &dof_handler,
+           const Table<2, bool> &K_mask = Table<2, bool>(),
+           const Table<2, bool> &M_mask = Table<2, bool>())
+    {
+      AssertDimension(SPB->n_block_rows(), dof_handler.size());
+      std::vector<IndexSet> locally_relevant_dofs(SPB->n_block_rows());
+      BlockVectorType       valence(SPB->n_block_rows());
 
       for (unsigned int i = 0; i < locally_relevant_dofs.size(); ++i)
         {
@@ -596,7 +669,7 @@ namespace dealii
                                   dof_handler[i]->get_communicator());
         }
 
-      indices.resize(SP_->n_block_rows());
+      indices.resize(SPB->n_block_rows());
       for (unsigned int i = 0; i < dof_handler.size(); ++i)
         for (const auto &cell : dof_handler[i]->active_cell_iterators())
           {
@@ -615,10 +688,23 @@ namespace dealii
       valence.compress(VectorOperation::add);
       valence.update_ghost_values();
 
+      if (build_cache)
+        {
+          AssertDimension(K_->n_block_rows(), SPB->n_block_rows());
+          AssertDimension(K_->n_block_cols(), SPB->n_block_cols());
+          cache.reinit(K_->n_block_rows(), K_->n_block_rows());
+          for (unsigned int i = 0; i < K_->n_block_rows(); ++i)
+            for (unsigned int j = 0; j < K_->n_block_cols(); ++j)
+              cache(i, j).emplace(
+                SparseMatrixTools::internal::get_cache<SparseMatrixType>(
+                  K_->block(i, j), indices[i]));
+        }
+
+
       auto K_blocks = SparseMatrixTools::restrict_to_full_block_matrices_(
-        *K_, *SP_, indices, indices, valence, K_mask);
+        *K_, *SPB, indices, indices, valence, K_mask, cache);
       auto M_blocks = SparseMatrixTools::restrict_to_full_block_matrices_(
-        *M_, *SP_, indices, indices, valence, M_mask);
+        *M_, *SPB, indices, indices, valence, M_mask, cache);
       unsigned int td =
         blk_slice.n_timedofs() * blk_slice.n_timesteps_at_once();
 
@@ -629,7 +715,7 @@ namespace dealii
           for (unsigned int i = 0; i < blk_slice.n_variables(); ++i)
             n_sd += indices[i][ii].size();
           auto &B = blocks[ii];
-          B       = FullMatrix<Number>(n_sd * td, n_sd * td);
+          B.reinit(n_sd * td, n_sd * td);
           for (unsigned int i = 0, r_o = 0; i < blk_slice.n_blocks(); ++i)
             {
               auto const &[it, iv, id] = blk_slice.decompose(i);
@@ -663,8 +749,24 @@ namespace dealii
                       std::shared_ptr<const SparsityPatternType> const &SP_,
                       const FullMatrix<Number>                         &Alpha,
                       const FullMatrix<Number>                         &Beta,
-                      std::shared_ptr<const DoFHandler<dim>> const &dof_handler)
+                      std::shared_ptr<const DoFHandler<dim>> const &dof_handler,
+                      bool build_cache_ = false)
       : timer(timer)
+      , build_cache(build_cache_)
+      , SP(SP_)
+    {
+      reinit(K_, M_, Alpha, Beta, dof_handler);
+      if (!build_cache)
+        SP.reset();
+    }
+
+    template <int dim>
+    void
+    reinit(std::shared_ptr<const SparseMatrixType> const &K_,
+           std::shared_ptr<const SparseMatrixType> const &M_,
+           const FullMatrix<Number>                      &Alpha,
+           const FullMatrix<Number>                      &Beta,
+           std::shared_ptr<const DoFHandler<dim>> const  &dof_handler)
     {
       std::vector<FullMatrix<Number>> K_blocks, M_blocks;
       IndexSet                        locally_relevant_dofs;
@@ -693,11 +795,18 @@ namespace dealii
       valence.compress(VectorOperation::add);
       valence.update_ghost_values();
 
+      cache.reinit(1, 1);
+      if (build_cache)
+        {
+          cache(0, 0).emplace(
+            SparseMatrixTools::internal::get_cache<SparseMatrixType>(*K_,
+                                                                     indices));
+        }
 
       SparseMatrixTools::restrict_to_full_matrices_(
-        *K_, *SP_, indices, indices, K_blocks, valence);
+        *K_, *SP, indices, indices, K_blocks, valence, cache(0, 0));
       SparseMatrixTools::restrict_to_full_matrices_(
-        *M_, *SP_, indices, indices, M_blocks, valence);
+        *M_, *SP, indices, indices, M_blocks, valence, cache(0, 0));
 
       blocks.resize(K_blocks.size());
       for (unsigned int ii = 0; ii < blocks.size(); ++ii)
@@ -706,7 +815,7 @@ namespace dealii
           const auto &M = M_blocks[ii];
           auto       &B = blocks[ii];
 
-          B = FullMatrix<Number>(K.m() * Alpha.m(), K.n() * Alpha.n());
+          B.reinit(K.m() * Alpha.m(), K.n() * Alpha.n());
 
           for (unsigned int i = 0; i < Alpha.m(); ++i)
             for (unsigned int j = 0; j < Alpha.n(); ++j)
@@ -790,10 +899,73 @@ namespace dealii
     BlockSlice                                                     blk_slice;
     std::vector<std::vector<std::vector<types::global_dof_index>>> indices;
     std::vector<FullMatrix<Number>>                                blocks;
+
+    bool                                            build_cache = false;
+    std::shared_ptr<const SparsityPatternType>      SP;
+    std::shared_ptr<const BlockSparsityPatternType> SPB;
+    Table<2, SparsityCache<Number>> cache = Table<2, SparsityCache<Number>>();
   };
 
+  template <int dim,
+            typename Number,
+            typename SpaceMatrixFreeOperator,
+            typename TimeMatrixFreeOperator>
+  void
+  reinit_asm(
+    MGLevelObject<std::shared_ptr<PreconditionVanka<Number>>>
+      &precondition_vanka,
+    MGLevelObject<std::vector<const DoFHandler<dim> *>> const &mg_dof_handlers,
+    MGLevelObject<std::shared_ptr<BlockSparseMatrixType>> &mg_space_operators,
+    MGLevelObject<std::shared_ptr<BlockSparseMatrixType>> &mg_time_operators,
+    MGLevelObject<std::shared_ptr<const SpaceMatrixFreeOperator>> const
+      &mg_space_operators_mf,
+    MGLevelObject<std::shared_ptr<const TimeMatrixFreeOperator>> const &,
+    MGLevelObject<std::vector<const dealii::AffineConstraints<Number> *>> const
+                                                         &mg_empty_constraints,
+    std::vector<std::array<FullMatrix<Number>, 4>> const &fetw,
+    std::vector<unsigned int> const                      &p_seq,
+    Table<2, bool> const                                 &K_mask,
+    Table<2, bool> const                                 &M_mask,
+    MGLevelObject<BlockVectorSliceT<Number>> const       &mg_data = {})
+  {
+    auto min_level = precondition_vanka.min_level();
+    auto max_level = precondition_vanka.max_level();
+    if constexpr (internal::has_set_data<SpaceMatrixFreeOperator,
+                                         Number>::value)
+      {
+        AssertDimension(min_level, mg_data.min_level());
+        AssertDimension(max_level, mg_data.max_level());
+      }
 
-  template <typename Number, typename PreconType>
+    for (unsigned int l = min_level, i = 0; l <= max_level; ++l, ++i)
+      if (p_seq[i] != 0)
+        {
+          auto const &lhs_uK_p = fetw[l][0];
+          auto const &lhs_uM_p = fetw[l][1];
+          // create Stokes matrix
+          auto &space_operator = mg_space_operators[l];
+          *space_operator      = 0.0;
+
+          auto const &space_operator_mf = mg_space_operators_mf[l];
+          if constexpr (internal::has_set_data<SpaceMatrixFreeOperator,
+                                               Number>::value)
+            space_operator_mf->set_data(mg_data[l]);
+
+          space_operator_mf->compute_system_matrix(*space_operator,
+                                                   mg_empty_constraints[l]);
+
+          auto &time_operator = mg_time_operators[l];
+          precondition_vanka[l]->reinit(space_operator,
+                                        time_operator,
+                                        lhs_uK_p,
+                                        lhs_uM_p,
+                                        mg_dof_handlers[l],
+                                        K_mask,
+                                        M_mask);
+        }
+  }
+
+  template <typename Number, typename PreconType1, typename PreconType2>
   class PreconditionSTMG
   {
     using BlockVectorType = BlockVectorT<Number>;
@@ -801,35 +973,45 @@ namespace dealii
 
   public:
     using AdditionalData = std::variant<PreconditionIdentity::AdditionalData,
-                                        typename PreconType::AdditionalData>;
-    static constexpr size_t id = 0, precon = 1;
+                                        typename PreconType1::AdditionalData,
+                                        typename PreconType2::AdditionalData>;
+    static constexpr unsigned int id = 0, precon1 = 1, precon2 = 2;
 
     AdditionalData additional_data;
 
     PreconditionSTMG()
     {}
 
-    PreconditionSTMG(PreconType const &smoother_)
+    PreconditionSTMG(PreconType1 const &smoother_)
       : smoother_variant(smoother_)
     {}
 
+    PreconditionSTMG(PreconType2 const &smoother_)
+      : smoother_variant(smoother_)
+    {}
 
     template <typename MatrixType>
     void
     initialize(
-      const MatrixType                                 &matrix,
+      const MatrixType                                  &matrix,
       std::variant<PreconditionIdentity::AdditionalData,
-                   typename PreconType::AdditionalData> additional_data)
+                   typename PreconType1::AdditionalData,
+                   typename PreconType2::AdditionalData> additional_data)
     {
       if (additional_data.index() == id)
         {
           auto &s = smoother_variant.template emplace<id>();
           s.initialize(matrix, std::get<id>(additional_data));
         }
-      else
+      else if (additional_data.index() == precon1)
         {
-          auto &s = smoother_variant.template emplace<precon>();
-          s.initialize(matrix, std::get<precon>(additional_data));
+          auto &s = smoother_variant.template emplace<precon1>();
+          s.initialize(matrix, std::get<precon1>(additional_data));
+        }
+      else if (additional_data.index() == precon2)
+        {
+          auto &s = smoother_variant.template emplace<precon2>();
+          s.initialize(matrix, std::get<precon2>(additional_data));
         }
     }
 
@@ -858,152 +1040,8 @@ namespace dealii
     }
 
   private:
-    std::variant<PreconditionIdentity, PreconType> smoother_variant;
-  };
-
-  struct PreconditionerGMGAdditionalData
-  {
-    double       smoothing_range               = 1;
-    unsigned int smoothing_degree              = 5;
-    unsigned int smoothing_eig_cg_n_iterations = 20;
-    unsigned int smoothing_steps               = 1;
-
-    double relaxation = 0.0;
-
-    std::string coarse_grid_smoother_type = "Smoother";
-
-    unsigned int coarse_grid_maxiter = 10;
-    double       coarse_grid_abstol  = 1e-20;
-    double       coarse_grid_reltol  = 1e-4;
-
-    bool restrict_is_transpose_prolongate = true;
-    bool variable                         = true;
-  };
-  template <int dim>
-  struct Parameters
-  {
-    bool         do_output         = false;
-    bool         print_timing      = false;
-    bool         space_time_mg     = true;
-    bool         time_before_space = false;
-    TimeStepType type              = TimeStepType::CGP;
-    ProblemType  problem           = ProblemType::wave;
-
-    CoarseningType coarsening_type        = CoarseningType::space_or_time;
-    bool           space_time_level_first = true;
-    bool           use_pmg                = false;
-    MGTransferGlobalCoarseningTools::PolynomialCoarseningSequenceType
-      poly_coarsening = MGTransferGlobalCoarseningTools::
-        PolynomialCoarseningSequenceType::decrease_by_one;
-    unsigned int n_timesteps_at_once     = 1;
-    int          n_timesteps_at_once_min = -1;
-    unsigned int fe_degree               = 1;
-    int          fe_degree_min           = -1;
-    int          fe_degree_min_space     = -1;
-    unsigned int n_deg_cycles            = 1;
-    unsigned int n_ref_cycles            = 1;
-    double       frequency               = 1.0;
-    double       rel_tol                 = 1.0e-12;
-    int          refinement              = 2;
-    bool         space_time_conv_test    = true;
-    bool         extrapolate             = true;
-    bool         colorize_boundary       = false;
-    bool         nitsche_boundary        = false;
-    std::string  functional_file         = "functionals.txt";
-    std::string  grid_descriptor         = "hyperRectangle";
-    std::string  additional_file         = "";
-    Point<dim>   hyperrect_lower_left =
-      dim == 2 ? Point<dim>(0., 0.) : Point<dim>(0., 0., 0.);
-    Point<dim> hyperrect_upper_right =
-      dim == 2 ? Point<dim>(1., 1.) : Point<dim>(1., 1., 1.);
-    std::vector<unsigned int> subdivisions  = std::vector<unsigned int>(dim, 1);
-    double                    distort_grid  = 0.0;
-    double                    distort_coeff = 0.0;
-    Point<dim> source = .5 * hyperrect_lower_left + .5 * hyperrect_upper_right;
-    double     end_time = 1.0;
-
-
-    PreconditionerGMGAdditionalData mg_data;
-    void
-    parse(const std::string file_name)
-    {
-      std::string type_, problem_, p_mg_ = "decrease_by_one",
-                                   c_type_ = "space_or_time";
-      dealii::ParameterHandler prm;
-      prm.add_parameter("doOutput", do_output);
-      prm.add_parameter("printTiming", print_timing);
-      prm.add_parameter("spaceTimeMg", space_time_mg);
-      prm.add_parameter("mgTimeBeforeSpace", time_before_space);
-      prm.add_parameter("timeType", type_);
-      prm.add_parameter("problemType", problem_);
-      prm.add_parameter("pMgType", p_mg_);
-      prm.add_parameter("coarseningType", c_type_);
-      prm.add_parameter("spaceTimeLevelFirst", space_time_level_first);
-      prm.add_parameter("usePMg", use_pmg);
-      prm.add_parameter("nTimestepsAtOnce", n_timesteps_at_once);
-      prm.add_parameter("nTimestepsAtOnceMin", n_timesteps_at_once_min);
-      prm.add_parameter("feDegree", fe_degree);
-      prm.add_parameter("feDegreeMin", fe_degree_min);
-      prm.add_parameter("feDegreeMinSpace", fe_degree_min_space);
-      prm.add_parameter("nDegCycles", n_deg_cycles);
-      prm.add_parameter("nRefCycles", n_ref_cycles);
-      prm.add_parameter("frequency", frequency);
-      prm.add_parameter("relativeTolerance", rel_tol);
-      prm.add_parameter("refinement", refinement);
-      prm.add_parameter("spaceTimeConvergenceTest", space_time_conv_test);
-      prm.add_parameter("extrapolate", extrapolate);
-      prm.add_parameter("colorizeBoundary", colorize_boundary);
-      prm.add_parameter("nitscheBoundary", nitsche_boundary);
-      prm.add_parameter("functionalFile", functional_file);
-      prm.add_parameter("gridDescriptor", grid_descriptor);
-      prm.add_parameter("additionalFile", additional_file);
-      prm.add_parameter("hyperRectLowerLeft", hyperrect_lower_left);
-      prm.add_parameter("hyperRectUpperRight", hyperrect_upper_right);
-      prm.add_parameter("subdivisions", subdivisions);
-      prm.add_parameter("distortGrid", distort_grid);
-      prm.add_parameter("distortCoeff", distort_coeff);
-      prm.add_parameter("sourcePoint", source);
-      prm.add_parameter("endTime", end_time);
-
-      prm.add_parameter("smoothingDegree", mg_data.smoothing_degree);
-      prm.add_parameter("smoothingSteps", mg_data.smoothing_steps);
-      prm.add_parameter("smoothingRange", mg_data.smoothing_range);
-      prm.add_parameter("relaxation", mg_data.relaxation);
-      prm.add_parameter("coarseGridSmootherType",
-                        mg_data.coarse_grid_smoother_type);
-      prm.add_parameter("coarseGridMaxiter", mg_data.coarse_grid_maxiter);
-      prm.add_parameter("coarseGridAbstol", mg_data.coarse_grid_abstol);
-      prm.add_parameter("coarseGridReltol", mg_data.coarse_grid_reltol);
-      prm.add_parameter("restrictIsTransposeProlongate",
-                        mg_data.restrict_is_transpose_prolongate);
-      prm.add_parameter("variable", mg_data.variable);
-      AssertIsFinite(frequency);
-      AssertIsFinite(distort_grid);
-      AssertIsFinite(distort_coeff);
-      AssertIsFinite(end_time);
-
-      std::ifstream file;
-      file.open(file_name);
-      prm.parse_input_from_json(file, true);
-      type            = str_to_time_type.at(type_);
-      problem         = str_to_problem_type.at(problem_);
-      poly_coarsening = str_to_polynomial_coarsening_type.at(p_mg_);
-      coarsening_type = str_to_coarsening_type.at(c_type_);
-      if (n_timesteps_at_once_min == -1)
-        n_timesteps_at_once_min = n_timesteps_at_once / 2;
-
-      n_timesteps_at_once_min =
-        std::clamp(n_timesteps_at_once_min,
-                   1,
-                   static_cast<int>(n_timesteps_at_once));
-      const int lowest_degree = type == TimeStepType::DG ? 0 : 1;
-      if (fe_degree_min == -1)
-        fe_degree_min = fe_degree - 1;
-      fe_degree_min =
-        std::clamp(fe_degree_min, lowest_degree, static_cast<int>(fe_degree));
-      if (fe_degree_min_space == -1)
-        fe_degree_min_space = fe_degree_min;
-    }
+    std::variant<PreconditionIdentity, PreconType1, PreconType2>
+      smoother_variant;
   };
 
   template <int dim, typename Number, typename LevelMatrixType>
@@ -1019,9 +1057,17 @@ namespace dealii
       PreconditionRelaxation<LevelMatrixType, SmootherPreconditionerType>;
     using SmootherType = PreconditionSTMG<
       Number,
-      PreconditionRelaxation<LevelMatrixType, SmootherPreconditionerType>>;
+      PreconditionRelaxation<LevelMatrixType, SmootherPreconditionerType>,
+      PreconditionChebyshev<LevelMatrixType,
+                            BlockVectorType,
+                            SmootherPreconditionerType>>;
     using MGSmootherType =
       MGSmootherPrecondition<LevelMatrixType, SmootherType, BlockVectorType>;
+
+    using CoarsePreconditionChebyshevType =
+      PreconditionChebyshev<LevelMatrixType,
+                            BlockVectorType,
+                            SmootherPreconditionerType>;
 
   public:
     GMG(
@@ -1049,7 +1095,8 @@ namespace dealii
           get_precondition_stmg_types(mg_sequence,
                                       parameters.coarsening_type,
                                       parameters.time_before_space,
-                                      parameters.space_time_level_first))
+                                      parameters.space_time_level_first,
+                                      parameters.mg_data.smoother))
       , src_(std::move(tmp1))
       , dst_(std::move(tmp2))
       , dof_handler(dof_handler)
@@ -1105,7 +1152,8 @@ namespace dealii
           get_precondition_stmg_types(mg_sequence,
                                       parameters.coarsening_type,
                                       parameters.time_before_space,
-                                      parameters.space_time_level_first))
+                                      parameters.space_time_level_first,
+                                      parameters.mg_data.smoother))
       , src_(std::move(tmp1))
       , dst_(std::move(tmp2))
       , dof_handler(1, &dof_handler)
@@ -1138,7 +1186,8 @@ namespace dealii
         mg_type_level,
         blk_indices);
       for (unsigned int i = 0, l = min_level; l <= max_level; ++i, ++l)
-        precondition_vanka[l]->set_blk_slice(blk_indices[i]);
+        if (precondition_sequence[i] != 0)
+          precondition_vanka[l]->set_blk_slice(blk_indices[i]);
     }
 
     void
@@ -1154,13 +1203,25 @@ namespace dealii
       for (unsigned int level = min_level, i = 0; level <= max_level;
            ++level, ++i)
         {
-          if (precondition_sequence[i] == SmootherType::precon)
+          if (precondition_sequence[i] == SmootherType::precon1)
             {
               auto &sd =
-                smoother_data[level].template emplace<SmootherType::precon>();
+                smoother_data[level].template emplace<SmootherType::precon1>();
               sd.preconditioner = precondition_vanka[level];
               sd.n_iterations   = additional_data.smoothing_steps;
               sd.relaxation     = additional_data.relaxation;
+              sd.eigenvalue_algorithm =
+                internal::EigenvalueAlgorithm::power_iteration;
+              sd.eig_cg_n_iterations =
+                additional_data.smoothing_eig_cg_n_iterations;
+              sd.smoothing_range = additional_data.smoothing_range;
+            }
+          else if (precondition_sequence[i] == SmootherType::precon2)
+            {
+              auto &sd =
+                smoother_data[level].template emplace<SmootherType::precon2>();
+              sd.preconditioner = precondition_vanka[level];
+              sd.degree         = additional_data.smoothing_steps;
               sd.eigenvalue_algorithm =
                 internal::EigenvalueAlgorithm::power_iteration;
               sd.eig_cg_n_iterations =
@@ -1187,26 +1248,57 @@ namespace dealii
             gmres_additional_data(additional_data.coarse_grid_maxiter);
           gmres_coarse = std::make_unique<SolverGMRES<BlockVectorType>>(
             *solver_control_coarse, gmres_additional_data);
-          typename CoarsePreconditionerType::AdditionalData coarse_precon_data;
-          coarse_precon_data.relaxation     = additional_data.relaxation;
-          coarse_precon_data.n_iterations   = additional_data.smoothing_steps;
-          coarse_precon_data.preconditioner = precondition_vanka[min_level];
-          coarse_precon_data.eigenvalue_algorithm =
-            internal::EigenvalueAlgorithm::power_iteration;
-          coarse_precon_data.eig_cg_n_iterations =
-            additional_data.smoothing_eig_cg_n_iterations;
-          coarse_precon_data.smoothing_range = additional_data.smoothing_range;
+          if (precondition_sequence.back() == SmootherType::precon1)
+            {
+              typename CoarsePreconditionerType::AdditionalData
+                coarse_precon_data;
+              coarse_precon_data.relaxation   = additional_data.relaxation;
+              coarse_precon_data.n_iterations = additional_data.smoothing_steps;
+              coarse_precon_data.preconditioner = precondition_vanka[min_level];
+              coarse_precon_data.eigenvalue_algorithm =
+                internal::EigenvalueAlgorithm::power_iteration;
+              coarse_precon_data.eig_cg_n_iterations =
+                additional_data.smoothing_eig_cg_n_iterations;
+              coarse_precon_data.smoothing_range =
+                additional_data.smoothing_range;
 
-          coarse_preconditioner = std::make_unique<CoarsePreconditionerType>();
-          coarse_preconditioner->initialize(*(mg_operators[min_level]),
-                                            coarse_precon_data);
+              coarse_preconditioner =
+                std::make_unique<CoarsePreconditionerType>();
+              coarse_preconditioner->initialize(*(mg_operators[min_level]),
+                                                coarse_precon_data);
 
-          mg_coarse = std::make_unique<
-            dealii::MGCoarseGridIterativeSolver<BlockVectorType,
-                                                SolverGMRES<BlockVectorType>,
-                                                LevelMatrixType,
-                                                CoarsePreconditionerType>>(
-            *gmres_coarse, *mg_operators[min_level], *coarse_preconditioner);
+              mg_coarse = std::make_unique<dealii::MGCoarseGridIterativeSolver<
+                BlockVectorType,
+                SolverGMRES<BlockVectorType>,
+                LevelMatrixType,
+                CoarsePreconditionerType>>(*gmres_coarse,
+                                           *mg_operators[min_level],
+                                           *coarse_preconditioner);
+            }
+          else
+            {
+              typename CoarsePreconditionChebyshevType::AdditionalData
+                coarse_precon_data;
+              coarse_precon_data.degree = additional_data.smoothing_steps;
+              coarse_precon_data.preconditioner = precondition_vanka[min_level];
+              coarse_precon_data.eigenvalue_algorithm =
+                internal::EigenvalueAlgorithm::power_iteration;
+              coarse_precon_data.eig_cg_n_iterations =
+                additional_data.smoothing_eig_cg_n_iterations;
+              coarse_precon_data.smoothing_range =
+                additional_data.smoothing_range;
+              coarse_preconditioner_cheb =
+                std::make_unique<CoarsePreconditionChebyshevType>();
+              coarse_preconditioner_cheb->initialize(*(mg_operators[min_level]),
+                                                     coarse_precon_data);
+              mg_coarse = std::make_unique<dealii::MGCoarseGridIterativeSolver<
+                BlockVectorType,
+                SolverGMRES<BlockVectorType>,
+                LevelMatrixType,
+                CoarsePreconditionChebyshevType>>(*gmres_coarse,
+                                                  *mg_operators[min_level],
+                                                  *coarse_preconditioner_cheb);
+            }
         }
       else
         {
@@ -1251,6 +1343,32 @@ namespace dealii
         }
     }
 
+    template <typename SolutionVectorType = BlockVectorType>
+    void
+    interpolate(unsigned int const        level,
+                BlockVectorType          &dst,
+                SolutionVectorType const &src) const
+    {
+      TimerOutput::Scope scope(timer, "gmg");
+      if (std::is_same_v<SolutionVectorType, BlockVectorType>)
+        transfer_block->interpolate(level, dst, src);
+      else
+        {
+          AssertDimension(level, max_level);
+          AssertDimension(src.n_blocks(), src_->n_blocks());
+          src_->copy_locally_owned_data_from(src);
+          transfer_block->interpolate(level, dst, *src_);
+        }
+    }
+
+    template <typename BlockVectorType2>
+    void
+    initialize_mg_vector(MGLevelObject<BlockVectorType> &dst,
+                         const BlockVectorType2         &src)
+    {
+      transfer_block->copy_to_mg(dof_handler, dst, src);
+    }
+
     std::unique_ptr<const GMG<dim, Number, LevelMatrixType>>
     clone() const
     {
@@ -1265,7 +1383,7 @@ namespace dealii
     const unsigned int              min_level;
     const unsigned int              max_level;
     std::vector<MGType>             mg_sequence;
-    std::vector<size_t>             precondition_sequence;
+    std::vector<unsigned int>       precondition_sequence;
 
     std::unique_ptr<BlockVectorType> src_;
     std::unique_ptr<BlockVectorType> dst_;
@@ -1284,13 +1402,14 @@ namespace dealii
 
     mutable mg::Matrix<BlockVectorType> mg_matrix;
 
-
     mutable std::unique_ptr<MGSmootherType> mg_smoother;
 
     mutable std::unique_ptr<MGCoarseGridBase<BlockVectorType>> mg_coarse;
     mutable std::unique_ptr<SolverControl>                solver_control_coarse;
     mutable std::unique_ptr<SolverGMRES<BlockVectorType>> gmres_coarse;
     mutable std::unique_ptr<CoarsePreconditionerType>     coarse_preconditioner;
+    mutable std::unique_ptr<CoarsePreconditionChebyshevType>
+      coarse_preconditioner_cheb;
 
     mutable std::unique_ptr<Multigrid<BlockVectorType>> mg;
 

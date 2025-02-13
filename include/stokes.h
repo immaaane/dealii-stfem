@@ -2,10 +2,11 @@
 // Copyright (C) 2024 by Nils Margenberg and Peter Munch
 
 #pragma once
+#include <deal.II/base/parameter_handler.h>
 
 #include "compute_block_matrix.h"
 
-namespace stokes
+namespace dealii::stokes
 {
   using namespace dealii;
   struct Parameters
@@ -15,32 +16,19 @@ namespace stokes
     double       characteristic_diameter = 0.1;
     double       u_mean                  = 1.0;
     double       viscosity               = 1.0;
+    double       delta0                  = 0.0;
+    double       delta1                  = 0.0;
     double       penalty1                = 20;
     double       penalty2                = 10;
+    double       outflow_penalty         = 0.0;
     bool         mean_pressure           = true;
     bool         dg_pressure             = true;
-    unsigned int dirichlet_boundary      = 1;
     unsigned int dfg_benchmark           = 0;
     double       height                  = 0.41;
 
+
     void
-    parse(const std::string file_name)
-    {
-      ParameterHandler prm;
-      prm.add_parameter("computeDragLift", compute_drag_lift);
-      prm.add_parameter("rho", rho);
-      prm.add_parameter("characteristicDiam", characteristic_diameter);
-      prm.add_parameter("uMean", u_mean);
-      prm.add_parameter("viscosity", viscosity);
-      prm.add_parameter("penalty1", penalty1);
-      prm.add_parameter("penalty2", penalty2);
-      prm.add_parameter("meanPressure", mean_pressure);
-      prm.add_parameter("dGPressure", dg_pressure);
-      prm.add_parameter("dfgBenchmark", dfg_benchmark);
-      std::ifstream file;
-      file.open(file_name);
-      prm.parse_input_from_json(file, true);
-    }
+    parse(const std::string file_name);
   };
 
   static constexpr double dirichlet_factor = 10;
@@ -93,6 +81,7 @@ namespace stokes
     Number
     value(Point<dim> const &, unsigned int const component) const override final
     {
+      using dealii::numbers::PI;
       auto       t      = this->get_time();
       auto const factor = is_time_dependent ?
                             sin(PI * t / 4.0) :
@@ -116,7 +105,8 @@ namespace stokes
                        const dealii::IndexSet        &locally_relevant_dofs_u_,
                        const dealii::IndexSet        &locally_relevant_dofs_p_,
                        const AffineConstraints<Number> &constraints_u,
-                       const AffineConstraints<Number> &constraints_p)
+                       const AffineConstraints<Number> &constraints_p,
+                       bool with_convection_stabilization = false)
   {
     auto sparsity_pattern = std::make_shared<BlockSparsityPatternType>();
     // Set up the row and column partitioning for the block system
@@ -141,13 +131,21 @@ namespace stokes
                              dof_handler_u_.get_communicator());
 
     // Create the block sparsity pattern for each block
-    DoFTools::make_block_sparsity_pattern_block(dof_handler_u_,
-                                                dof_handler_u_,
-                                                sparsity_pattern->block(0, 0),
-                                                constraints_u,
-                                                constraints_u,
-                                                true,
-                                                subdomain);
+    if (with_convection_stabilization)
+      DoFTools::make_block_sparsity_pattern_block(dof_handler_u_,
+                                                  dof_handler_u_,
+                                                  sparsity_pattern->block(0, 0),
+                                                  constraints_u,
+                                                  constraints_u,
+                                                  true,
+                                                  subdomain);
+    else
+      DoFTools::make_flux_sparsity_pattern(dof_handler_u_,
+                                           sparsity_pattern->block(0, 0),
+                                           constraints_u,
+                                           true,
+                                           subdomain);
+
 
     DoFTools::make_block_sparsity_pattern_block(dof_handler_u_,
                                                 dof_handler_p_,
@@ -169,4 +167,4 @@ namespace stokes
     return sparsity_pattern;
   }
 
-} // namespace stokes
+} // namespace dealii::stokes

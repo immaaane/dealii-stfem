@@ -105,3 +105,41 @@ generate_practical_stokes_parameters() {
         done
     done
 }
+
+generate_practical_cdr_parameters() {
+    local base_files="$1"
+    local types="$2"
+    local distortCoeffs="$3"
+    local sms="$4"
+    local nRef="$5"
+    local dim=3
+    local nDegCycles=2
+    local nRefCycles=1
+    local doOutput="--doOutput"
+    local extrapolate="--extrapolate"
+    local printTiming="--printTiming"
+    local spaceTimeMg="--spaceTimeMg"
+    local rIsTransposeP="--restrictIsTransposeProlongate"
+    local stLevelFirst="$6"
+    local estRelax="--relaxation 0.0"
+    local colorizeBd="--colorizeBoundary"
+    local cdr="--problemType cdr"
+    local degMin="--feDegreeMin 1"
+    local ntspMin="--nTimestepsAtOnceMin 1"
+    # Define problems and their respective time types
+    for s in $sms; do
+        for problem in $base_files; do
+            for timeType in $types; do
+                for distortC in $distortCoeffs; do
+                    testNameSuffix=""
+                    if [[ $distortC != "0.0" ]]; then
+                        testNameSuffix="_rough"
+                    fi
+                    testName="tests/json/practical${testNameSuffix}_${problem}_${timeType}"
+                    filename=$(python tests/json/generate.py --testName $testName --dim $dim $ntspMin $degMin $cdr $extrapolate $colorizeBd $printTiming $spaceTimeMg $rIsTransposeP $estRelax --timeType $timeType --baseFile $problem --nDegCycles $nDegCycles --nRefCycles $nRefCycles --distortCoeff $distortC --feDegree 2  --smoothingSteps $s --refinement $nRef $stLevelFirst)
+                    filenames_p+=($filename)
+                done
+            done
+        done
+    done
+}

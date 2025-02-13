@@ -4,10 +4,49 @@
 #include <deal.II/matrix_free/matrix_free.h>
 #include <deal.II/matrix_free/tools.h>
 
+#include <tuple>
+
+#include "types.h"
+
 namespace dealii
 {
   namespace SparseMatrixTools
   {
+    namespace internal
+    {
+      template <typename SparseMatrixType>
+      std::pair<IndexSet, IndexSet>
+      get_cache(
+        const SparseMatrixType                                  &system_matrix,
+        const std::vector<std::vector<types::global_dof_index>> &row_indices)
+      { // 0) determine which rows are locally owned and which ones are remote
+        const auto local_size = internal::get_local_size(system_matrix);
+        const auto prefix_sum = Utilities::MPI::partial_and_total_sum(
+          local_size, internal::get_mpi_communicator(system_matrix));
+        IndexSet locally_owned_dofs(std::get<1>(prefix_sum));
+        locally_owned_dofs.add_range(std::get<0>(prefix_sum),
+                                     std::get<0>(prefix_sum) + local_size);
+
+        std::vector<dealii::types::global_dof_index> ghost_indices_vector;
+
+        for (const auto &i : row_indices)
+          ghost_indices_vector.insert(ghost_indices_vector.end(),
+                                      i.begin(),
+                                      i.end());
+
+        std::sort(ghost_indices_vector.begin(), ghost_indices_vector.end());
+
+        IndexSet locally_active_dofs(std::get<1>(prefix_sum));
+        locally_active_dofs.add_indices(ghost_indices_vector.begin(),
+                                        ghost_indices_vector.end());
+
+        locally_active_dofs.subtract_set(locally_owned_dofs);
+
+
+        return std::make_pair(locally_owned_dofs, locally_active_dofs);
+      }
+    } // namespace internal
+
     template <typename SparseMatrixType,
               typename SparsityPatternType,
               typename Number>
@@ -18,31 +57,13 @@ namespace dealii
       const std::vector<std::vector<types::global_dof_index>> &row_indices,
       const std::vector<std::vector<types::global_dof_index>> &col_indices,
       std::vector<FullMatrix<Number>>                         &blocks,
-      const VectorT<Number> &scaling = VectorT<Number>())
+      const VectorT<Number>       &scaling = VectorT<Number>(),
+      const SparsityCache<Number> &cache   = std::nullopt)
     {
-      // 0) determine which rows are locally owned and which ones are remote
-      const auto local_size = internal::get_local_size(system_matrix);
-      const auto prefix_sum = Utilities::MPI::partial_and_total_sum(
-        local_size, internal::get_mpi_communicator(system_matrix));
-      IndexSet locally_owned_dofs(std::get<1>(prefix_sum));
-      locally_owned_dofs.add_range(std::get<0>(prefix_sum),
-                                   std::get<0>(prefix_sum) + local_size);
-
-      std::vector<dealii::types::global_dof_index> ghost_indices_vector;
-
-      for (const auto &i : row_indices)
-        ghost_indices_vector.insert(ghost_indices_vector.end(),
-                                    i.begin(),
-                                    i.end());
-
-      std::sort(ghost_indices_vector.begin(), ghost_indices_vector.end());
-
-      IndexSet locally_active_dofs(std::get<1>(prefix_sum));
-      locally_active_dofs.add_indices(ghost_indices_vector.begin(),
-                                      ghost_indices_vector.end());
-
-      locally_active_dofs.subtract_set(locally_owned_dofs);
-
+      auto const &[locally_owned_dofs, locally_active_dofs] =
+        cache.has_value() ?
+          cache.value() :
+          internal::get_cache<SparseMatrixType>(system_matrix, row_indices);
       // 1) collect remote rows of sparse matrix
       const auto locally_relevant_matrix_entries =
         internal::extract_remote_rows<Number>(system_matrix,
@@ -50,7 +71,6 @@ namespace dealii
                                               locally_active_dofs,
                                               internal::get_mpi_communicator(
                                                 system_matrix));
-
 
       // 2) loop over all cells and "revert" assembly
       blocks.clear();
@@ -127,9 +147,11 @@ namespace dealii
       const std::vector<std::vector<std::vector<types::global_dof_index>>>
         &row_indices,
       const std::vector<std::vector<std::vector<types::global_dof_index>>>
-                                 &col_indices,
-      const BlockVectorT<Number> &scaling = BlockVectorT<Number>(),
-      const Table<2, bool>       &mask    = Table<2, bool>())
+                                           &col_indices,
+      const BlockVectorT<Number>           &scaling = BlockVectorT<Number>(),
+      const Table<2, bool>                 &mask    = Table<2, bool>(),
+      const Table<2, SparsityCache<Number>> cache =
+        Table<2, SparsityCache<Number>>())
     {
       Table<2, std::vector<FullMatrix<Number>>> blocks_(
         sparsity_pattern.n_block_rows(), sparsity_pattern.n_block_cols());
@@ -141,7 +163,9 @@ namespace dealii
                                        row_indices[i],
                                        col_indices[j],
                                        blocks_(i, j),
-                                       scaling.block(i));
+                                       scaling.block(i),
+                                       cache.empty() ? std::nullopt :
+                                                       cache(i, j));
 
 #ifdef DEBUG
       for (unsigned int i = 0; i < sparsity_pattern.n_block_rows(); ++i)
@@ -162,10 +186,12 @@ namespace dealii
       const std::vector<std::vector<std::vector<types::global_dof_index>>>
         &row_indices,
       const std::vector<std::vector<std::vector<types::global_dof_index>>>
-                                      &col_indices,
-      std::vector<FullMatrix<Number>> &blocks,
-      const BlockVectorT<Number>      &scaling = BlockVectorT<Number>(),
-      const Table<2, bool>            &mask    = Table<2, bool>())
+                                            &col_indices,
+      std::vector<FullMatrix<Number>>       &blocks,
+      const BlockVectorT<Number>            &scaling = BlockVectorT<Number>(),
+      const Table<2, bool>                  &mask    = Table<2, bool>(),
+      const Table<2, SparsityCache<Number>> &cache =
+        Table<2, SparsityCache<Number>>())
     {
       Table<2, std::vector<FullMatrix<Number>>> blocks_ =
         restrict_to_full_block_matrices_(system_matrix,
@@ -173,7 +199,8 @@ namespace dealii
                                          row_indices,
                                          col_indices,
                                          scaling,
-                                         mask);
+                                         mask,
+                                         cache);
       blocks.resize(blocks_(0, 0).size());
       for (unsigned int ii = 0; ii < blocks.size(); ++ii)
         {

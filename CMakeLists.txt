@@ -13,13 +13,20 @@ ENDIF()
 
 DEAL_II_INITIALIZE_CACHED_VARIABLES()
 
-SET( TARGET_SRC dummy.cc )
-
+SET( TARGET_SRC dummy.cc
+  include/fe_time.cc
+  include/exact_solution.cc
+  include/stmg.cc
+  include/operators.cc
+  include/parameters.cc
+  include/stokes.cc
+)
 INCLUDE_DIRECTORIES(include)
 
 PROJECT(stfem)
 
 ADD_LIBRARY(stfem SHARED ${TARGET_SRC})
+target_include_directories(stfem PUBLIC include)
 
 ADD_CUSTOM_TARGET(debug
   COMMAND ${CMAKE_COMMAND} -DCMAKE_BUILD_TYPE=Debug ${CMAKE_SOURCE_DIR}

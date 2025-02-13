@@ -2,25 +2,46 @@
 // Copyright (C) 2024 by Nils Margenberg and Peter Munch
 
 #pragma once
-
 #include <deal.II/base/subscriptor.h>
+#include <deal.II/base/timer.h>
+#include <deal.II/base/vectorization.h>
+
+#include <deal.II/lac/diagonal_matrix.h>
 
 #include <deal.II/matrix_free/fe_evaluation.h>
 #include <deal.II/matrix_free/matrix_free.h>
 #include <deal.II/matrix_free/tools.h>
 
+#include <deal.II/numerics/vector_tools.h>
+
 #include <boost/random/mersenne_twister.hpp>
 #include <boost/random/uniform_real_distribution.hpp>
 
 #include "compute_block_matrix.h"
+#include "parameters.h"
 #include "types.h"
+
 namespace dealii
 {
   namespace internal
   {
+    template <int dim, typename Number>
+    void
+    set_task_parallel_scheme(
+      MPI_Comm const                                   &comm,
+      typename MatrixFree<dim, Number>::AdditionalData &additional_data)
+    {
+      if (Utilities::MPI::n_mpi_processes(comm) > 1)
+        additional_data.tasks_parallel_scheme =
+          MatrixFree<dim, Number>::AdditionalData::TasksParallelScheme::none;
+      else
+        additional_data.tasks_parallel_scheme = MatrixFree<dim, Number>::
+          AdditionalData::TasksParallelScheme::partition_partition;
+    }
+
     template <int dim, typename Number, typename T, typename F>
     void
-    set_dirichlet_values(T &v, const Point<dim, Number> &p, F &&fill_value)
+    set_values(T &v, const Point<dim, Number> &p, F &&fill_value)
     {
       for (unsigned int i = 0; i < p[0].size(); ++i)
         {
@@ -33,30 +54,98 @@ namespace dealii
 
     template <int dim, typename Number>
     void
-    set_dirichlet_vector(Tensor<1, dim, Number>                     &v,
-                         const Point<dim, Number>                   &p,
-                         Function<dim, typename Number::value_type> &g)
+    set_2nd_rank(Tensor<2, dim, Number>                           &v,
+                 const Point<dim, Number>                         &p,
+                 const Function<dim, typename Number::value_type> &g)
     {
-      set_dirichlet_values(v,
-                           p,
-                           [&g](auto &v, unsigned int i, const auto &point) {
-                             for (unsigned int d = 0; d < dim; ++d)
-                               v[d][i] = g.value(point, d);
-                           });
+      set_values(v, p, [&g](auto &v, unsigned int i, const auto &point) {
+        for (unsigned int r = 0; r < dim; ++r)
+          for (unsigned int c = 0; c < dim; ++c)
+            v[r][c][i] = g.value(point, c + dim * r);
+      });
+    }
+
+
+    template <int dim, typename Number>
+    void
+    set_vector(Tensor<1, dim, Number>                           &v,
+               const Point<dim, Number>                         &p,
+               const Function<dim, typename Number::value_type> &g)
+    {
+      set_values(v, p, [&g](auto &v, unsigned int i, const auto &point) {
+        for (unsigned int d = 0; d < dim; ++d)
+          v[d][i] = g.value(point, d);
+      });
     }
 
     template <int dim, typename Number>
     void
-    set_dirichlet_scalar(Number                                     &v,
-                         const Point<dim, Number>                   &p,
-                         Function<dim, typename Number::value_type> &g)
+    set_scalar(Number                                           &v,
+               const Point<dim, Number>                         &p,
+               const Function<dim, typename Number::value_type> &g)
     {
-      set_dirichlet_values(v,
-                           p,
-                           [&g](auto &v, unsigned int i, const auto &point) {
-                             v[i] = g.value(point);
-                           });
+      set_values(v, p, [&g](auto &v, unsigned int i, const auto &point) {
+        v[i] = g.value(point);
+      });
     }
+    template <typename Number>
+    void
+    scatter(BlockVectorT<Number>       &dst,
+            const BlockVectorT<Number> &tmp,
+            const FullMatrix<Number>   &matrix,
+            const BlockSlice           &blk_slice,
+            unsigned int                jt,
+            unsigned int                jv,
+            unsigned int                jd,
+            unsigned int                it,
+            unsigned int                iv,
+            unsigned int                id)
+    {
+      unsigned int j = blk_slice.index(jt, jv, jd);
+      unsigned int i = blk_slice.index(it, iv, id);
+      if (std::abs(matrix(j, i)) > 10 * std::numeric_limits<Number>::epsilon())
+        dst.block(j).add(matrix(j, i), tmp.block(jv));
+    }
+
+    template <typename Number>
+    void
+    scatter(BlockVectorT<Number>       &dst,
+            const BlockVectorT<Number> &tmp,
+            const FullMatrix<Number>   &matrix,
+            const BlockSlice           &blk_slice,
+            unsigned int                v,
+            unsigned int                jt,
+            unsigned int                jd,
+            unsigned int                it,
+            unsigned int                id)
+    {
+      scatter(dst, tmp, matrix, blk_slice, jt, v, jd, it, v, id);
+    }
+
+    template <typename T, typename Number, typename = std::void_t<>>
+    struct has_set_data : std::false_type
+    {};
+
+    template <typename T, typename Number>
+    struct has_set_data<T,
+                        Number,
+                        std::void_t<decltype(std::declval<T>().set_data(
+                          std::declval<BlockVectorSliceT<Number>>()))>>
+      : std::true_type
+    {};
+
+    template <typename T, typename Number, typename = std::void_t<>>
+    struct has_form : std::false_type
+    {};
+
+    template <typename T, typename Number>
+    struct has_form<T,
+                    Number,
+                    std::void_t<decltype(std::declval<T>().form(
+                      std::declval<BlockVectorT<Number> &>(),
+                      std::declval<BlockVectorT<Number> const &>()))>>
+      : std::true_type
+    {};
   } // namespace internal
 
   template <int dim, int n_components, typename Number>
@@ -64,6 +153,60 @@ namespace dealii
     typename std::conditional<n_components == dim,
                               Tensor<1, dim, VectorizedArray<Number>>,
                               VectorizedArray<Number>>::type;
+
+  template <int dim, typename Number>
+  void
+  get_h_cell(AlignedVector<VectorizedArray<Number>> &array_h,
+             MatrixFree<dim, Number> const          &matrix_free,
+             unsigned int const                      dof_index)
+  {
+    unsigned int n_cells =
+      matrix_free.n_cell_batches() + matrix_free.n_ghost_cell_batches();
+    array_h.resize(n_cells);
+
+    FEEvaluation<dim, -1, 0, dim, Number> fe_values(matrix_free);
+    for (unsigned int cell = 0; cell < matrix_free.n_cell_batches() +
+                                         matrix_free.n_ghost_cell_batches();
+         ++cell)
+      {
+        fe_values.reinit(cell);
+        Number volume = 0;
+        for (unsigned int q = 0; q < fe_values.n_q_points; ++q)
+          volume += fe_values.JxW(q);
+
+        array_h[cell] = pow(volume, 1.0 / dim);
+      }
+  }
+
+
+  template <int dim, typename Number, int n_components = 1>
+  void
+  get_h_face(AlignedVector<VectorizedArray<Number>> &array_h,
+             MatrixFree<dim, Number> const          &matrix_free,
+             unsigned int const                      dof_index = 0)
+  {
+    unsigned int n_face = matrix_free.n_inner_face_batches() +
+                          matrix_free.n_boundary_face_batches() +
+                          matrix_free.n_ghost_inner_face_batches();
+    array_h.resize(n_face);
+    // Create FEFaceEvaluation objects for inner and boundary faces
+    FEFaceEvaluation<dim, -1, 0, n_components, Number> fe_face(matrix_free,
+                                                               true,
+                                                               dof_index);
+
+    const unsigned int total_face_batches =
+      matrix_free.n_inner_face_batches() +
+      matrix_free.n_boundary_face_batches();
+    for (unsigned int face = 0; face < total_face_batches; ++face)
+      {
+        fe_face.reinit(face);
+        VectorizedArray<Number> area = 0;
+        for (unsigned int q = 0; q < fe_face.n_q_points; ++q)
+          area += fe_face.JxW(q);
+
+        array_h[face] = std::pow(area, static_cast<Number>(1.0 / (dim - 1)));
+      }
+  }
 
   template <typename Number>
   void
@@ -122,6 +265,25 @@ namespace dealii
   }
 
   template <typename Number>
+  void
+  tensorproduct(MutableBlockVectorSliceT<Number> &c,
+                FullMatrix<Number> const         &A,
+                BlockVectorSliceT<Number> const  &b,
+                int                               block_offset = 0)
+  {
+    const unsigned int n_blocks = A.n();
+    const unsigned int m_blocks = A.m();
+    for (unsigned int i = 0; i < m_blocks; ++i)
+      {
+        c[block_offset + i].get() = 0.0;
+        for (unsigned int j = 0; j < n_blocks; ++j)
+          if (A(i, j) != 0.0)
+            c[block_offset + i].get().add(A(i, j), b[block_offset + j].get());
+      }
+  }
+
+
+  template <typename Number>
   BlockVectorT<Number>
   operator*(const FullMatrix<Number> &A, BlockVectorT<Number> const &b)
   {
@@ -154,7 +316,14 @@ namespace dealii
     std::void_t<decltype(std::declval<T>().initialize_dof_vector(
       std::declval<VectorType &>()))>> : std::true_type
   {};
-  using dealii::internal::AffineConstraints::IsBlockMatrix;
+  using internal::AffineConstraints::IsBlockMatrix;
+
+  enum class OperatorMode
+  {
+    none,
+    jacobian,
+    form
+  };
 
   template <int dim,
             typename Number,
@@ -166,26 +335,37 @@ namespace dealii
     using BlockVectorType = BlockVectorT<Number>;
     using VectorType      = VectorT<Number>;
 
-    SystemMatrixBase(TimerOutput              &timer,
-                     const SystemMatrixTypeK  &K,
-                     const SystemMatrixTypeM  &M,
-                     const FullMatrix<Number> &Alpha_,
-                     const FullMatrix<Number> &Beta_,
-                     BlockSlice                blk_slice_ = {})
+    SystemMatrixBase(
+      TimerOutput              &timer,
+      const SystemMatrixTypeK  &K,
+      const SystemMatrixTypeM  &M,
+      const FullMatrix<Number> &Alpha_,
+      const FullMatrix<Number> &Beta_,
+      BlockSlice                blk_slice_           = {},
+      NonlinearTreatment        nonlinear_treatment_ = NonlinearTreatment::None)
       : timer(timer)
       , K(K)
       , M(M)
       , Alpha(Alpha_)
       , Beta(Beta_)
       , blk_slice(blk_slice_)
+      , nonlinear_treatment(nonlinear_treatment_)
+      , nonlinear(nonlinear_treatment != NonlinearTreatment::None)
       , alpha_is_zero(Alpha.all_zero())
       , beta_is_zero(Beta.all_zero())
     {
       AssertDimension(Alpha.m(), Beta.m());
       AssertDimension(Alpha.n(), Beta.n());
     }
+
     virtual void
     vmult(BlockVectorType &dst, const BlockVectorType &src) const = 0;
+
+    virtual void
+    form(BlockVectorType &dst, const BlockVectorType &src) const
+    {
+      this->vmult(dst, src);
+    }
 
     virtual void
     Tvmult(BlockVectorType &dst, const BlockVectorType &src) const = 0;
@@ -199,6 +379,12 @@ namespace dealii
     {
       dst = 0.0;
       vmult_slice_add(dst, src);
+    }
+
+    void
+    set_data(BlockVectorType const &solution_linearization_) const
+    {
+      solution_linearization = &solution_linearization_;
     }
 
     virtual types::global_dof_index
@@ -282,31 +468,69 @@ namespace dealii
     const FullMatrix<Number> &Alpha;
     const FullMatrix<Number> &Beta;
 
-    BlockSlice blk_slice;
+    template <typename T>
+    void
+    set_linearization_data(T                     &member,
+                           BlockVectorType const &vec,
+                           unsigned int           it,
+                           unsigned int           id) const
+    {
+      if constexpr (internal::has_set_data<T, Number>::value)
+        if (nonlinear)
+          {
+            AssertDimension(blk_slice.n_blocks(), vec.n_blocks());
+            member.set_data(blk_slice.get_variable(vec, it, id));
+          }
+    }
+
+
+    template <typename T>
+    void
+    set_linearization_data_slice(T &member, BlockVectorType const &vec) const
+    {
+      if constexpr (internal::has_set_data<T, Number>::value)
+        if (nonlinear)
+          {
+            BlockVectorSliceT<Number> v_slice;
+            v_slice.reserve(vec.n_blocks());
+            for (unsigned int v = 0; v < vec.n_blocks(); ++v)
+              v_slice.push_back(vec.block(v));
+            member.set_data(v_slice);
+          }
+    }
+
+    mutable BlockVectorType const *solution_linearization;
+
+    BlockSlice         blk_slice;
+    NonlinearTreatment nonlinear_treatment;
+    bool               nonlinear;
     // Only used for nx1: small optimization to avoid unnecessary vmult
     bool alpha_is_zero;
     bool beta_is_zero;
   };
 
-
-  template <int dim, typename Number, typename SystemMatrixType>
+  template <int dim,
+            typename Number,
+            typename SystemMatrixTypeK,
+            typename SystemMatrixTypeM = SystemMatrixTypeK>
   class SystemMatrix final
-    : public SystemMatrixBase<dim, Number, SystemMatrixType>
+    : public SystemMatrixBase<dim, Number, SystemMatrixTypeK, SystemMatrixTypeM>
   {
   public:
     using BlockVectorType = BlockVectorT<Number>;
     using VectorType      = VectorT<Number>;
 
     SystemMatrix(TimerOutput              &timer,
-                 const SystemMatrixType   &K,
-                 const SystemMatrixType   &M,
+                 const SystemMatrixTypeK  &K,
+                 const SystemMatrixTypeM  &M,
                  const FullMatrix<Number> &Alpha_,
                  const FullMatrix<Number> &Beta_)
-      : SystemMatrixBase<dim, Number, SystemMatrixType>(timer,
-                                                        K,
-                                                        M,
-                                                        Alpha_,
-                                                        Beta_)
+      : SystemMatrixBase<dim, Number, SystemMatrixTypeK, SystemMatrixTypeM>(
+          timer,
+          K,
+          M,
+          Alpha_,
+          Beta_)
     {}
 
     virtual void
@@ -450,57 +674,35 @@ namespace dealii
     using BlockVectorType = BlockVectorT<Number>;
     using VectorType      = VectorT<Number>;
 
-    SystemMatrixStokes(TimerOutput              &timer,
-                       const StokesMatrixType   &K,
-                       const MassMatrixType     &M,
-                       const FullMatrix<Number> &Alpha_,
-                       const FullMatrix<Number> &Beta_,
-                       const BlockSlice         &blk_slice_)
+    SystemMatrixStokes(
+      TimerOutput              &timer,
+      const StokesMatrixType   &K,
+      const MassMatrixType     &M,
+      const FullMatrix<Number> &Alpha_,
+      const FullMatrix<Number> &Beta_,
+      const BlockSlice         &blk_slice_,
+      NonlinearTreatment        nonlinear_treatment_ = NonlinearTreatment::None)
       : SystemMatrixBase<dim, Number, StokesMatrixType, MassMatrixType>(
           timer,
           K,
           M,
           Alpha_,
           Beta_,
-          blk_slice_)
+          blk_slice_,
+          nonlinear_treatment_)
     {}
 
 
     virtual void
     vmult(BlockVectorType &dst, const BlockVectorType &src) const override
     {
-      TimerOutput::Scope scope(this->timer, "vmult");
-      auto const        &blk_slice = this->blk_slice;
-      AssertDimension(this->Alpha.m(), src.n_blocks());
-      dst = 0.0;
-      BlockVectorType tmp(2);
-      this->initialize_spatial_dof_vector(tmp);
-      BlockVectorType tmp_src(tmp.n_blocks());
-      auto const     &n_timesteps_at_once = blk_slice.n_timesteps_at_once();
-      for (unsigned int it = 0; it < n_timesteps_at_once; ++it)
-        for (unsigned int id = 0; id < blk_slice.n_timedofs(); ++id)
-          {
-            auto slice =
-              blk_slice.get_variable(const_cast<BlockVectorType &>(src),
-                                     it,
-                                     id);
-            swap(tmp_src, slice);
-            // Stokes
-            this->K.vmult(tmp, tmp_src);
-            for (unsigned int jt = 0; jt < n_timesteps_at_once; ++jt)
-              for (unsigned int jd = 0; jd < blk_slice.n_timedofs(); ++jd)
-                for (unsigned int jv = 0; jv < blk_slice.n_variables(); ++jv)
-                  scatter(
-                    dst, tmp, this->Alpha, blk_slice, jt, jv, jd, it, 0, id);
+      tensorproduct_eval(dst, src, true);
+    }
 
-            // \partial_t v
-            this->M.vmult(tmp.block(0), tmp_src.block(0));
-            for (unsigned int jt = 0; jt < n_timesteps_at_once; ++jt)
-              for (unsigned int jd = 0; jd < blk_slice.n_timedofs(); ++jd)
-                scatter(dst, tmp, this->Beta, blk_slice, 0, jt, jd, it, id);
-
-            swap(slice, tmp_src);
-          }
+    virtual void
+    form(BlockVectorType &dst, const BlockVectorType &src) const override
+    {
+      tensorproduct_eval(dst, src, false);
     }
 
     virtual void
@@ -528,13 +730,15 @@ namespace dealii
             for (unsigned int jt = 0; jt < n_timesteps_at_once; ++jt)
               for (unsigned int jd = 0; jd < blk_slice.n_timedofs(); ++jd)
                 for (unsigned int v = 0; v < blk_slice.n_variables(); ++v)
-                  scatter(dst, tmp, this->Alpha, blk_slice, v, it, id, jt, jd);
+                  internal::scatter(
+                    dst, tmp, this->Alpha, blk_slice, v, it, id, jt, jd);
 
             // \partial_t v
             this->M.vmult(tmp.block(0), tmp_src.block(0));
             for (unsigned int jt = 0; jt < n_timesteps_at_once; ++jt)
               for (unsigned int jd = 0; jd < blk_slice.n_timedofs(); ++jd)
-                scatter(dst, tmp, this->Beta, blk_slice, 0, it, id, jt, jd);
+                internal::scatter(
+                  dst, tmp, this->Beta, blk_slice, 0, it, id, jt, jd);
 
             swap(slice, tmp_src);
           }
@@ -552,6 +756,9 @@ namespace dealii
 
       BlockVectorType tmp(2);
       this->initialize_spatial_dof_vector(tmp);
+      if (!this->alpha_is_zero)
+        this->set_linearization_data_slice(this->K,
+                                           *this->solution_linearization);
 
       for (unsigned int it = 0; it < blk_slice.n_timesteps_at_once(); ++it)
         for (unsigned int id = 0; id < blk_slice.n_timedofs(); ++id)
@@ -561,13 +768,15 @@ namespace dealii
               {
                 this->K.vmult(tmp, src);
                 for (unsigned int v = 0; v < blk_slice.n_variables(); ++v)
-                  scatter(dst, tmp, this->Alpha, blk_slice, it, v, id, 0, 0, 0);
+                  internal::scatter(
+                    dst, tmp, this->Alpha, blk_slice, it, v, id, 0, 0, 0);
               }
             // \partial_t v
             if (!this->beta_is_zero)
               {
                 this->M.vmult(tmp.block(0), src.block(0));
-                scatter(dst, tmp, this->Beta, blk_slice, it, 0, id, 0, 0, 0);
+                internal::scatter(
+                  dst, tmp, this->Beta, blk_slice, it, 0, id, 0, 0, 0);
               }
           }
     }
@@ -608,39 +817,55 @@ namespace dealii
 
   private:
     void
-    scatter(BlockVectorType          &dst,
-            const BlockVectorType    &tmp,
-            const FullMatrix<Number> &matrix,
-            const BlockSlice         &blk_slice,
-            unsigned int              jt,
-            unsigned int              jv,
-            unsigned int              jd,
-            unsigned int              it,
-            unsigned int              iv,
-            unsigned int              id) const
+    tensorproduct_eval(BlockVectorType       &dst,
+                       BlockVectorType const &src,
+                       bool                   is_vmult) const
     {
-      unsigned int j = blk_slice.index(jt, jv, jd);
-      unsigned int i = blk_slice.index(it, iv, id);
-      if (std::abs(matrix(j, i)) > 10 * std::numeric_limits<Number>::epsilon())
-        dst.block(j).add(matrix(j, i), tmp.block(jv));
-    }
+      TimerOutput::Scope scope(this->timer, "vmult");
+      auto const        &blk_slice = this->blk_slice;
+      AssertDimension(this->Alpha.m(), src.n_blocks());
+      dst = 0.0;
+      BlockVectorType tmp(2);
+      this->initialize_spatial_dof_vector(tmp);
+      BlockVectorType tmp_src(tmp.n_blocks());
+      if (this->nonlinear)
+        Assert(this->solution_linearization != nullptr,
+               ExcMessage("No linearization set"));
+      auto const &n_timesteps_at_once = blk_slice.n_timesteps_at_once();
+      for (unsigned int it = 0; it < n_timesteps_at_once; ++it)
+        for (unsigned int id = 0; id < blk_slice.n_timedofs(); ++id)
+          {
+            auto slice =
+              blk_slice.get_variable(const_cast<BlockVectorType &>(src),
+                                     it,
+                                     id);
+            swap(tmp_src, slice);
+            this->set_linearization_data(this->K,
+                                         *this->solution_linearization,
+                                         it,
+                                         id);
+            // Stokes
+            if (is_vmult)
+              this->K.vmult(tmp, tmp_src);
+            else
+              this->K.form(tmp, tmp_src);
+            for (unsigned int jt = 0; jt < n_timesteps_at_once; ++jt)
+              for (unsigned int jd = 0; jd < blk_slice.n_timedofs(); ++jd)
+                for (unsigned int jv = 0; jv < blk_slice.n_variables(); ++jv)
+                  internal::scatter(
+                    dst, tmp, this->Alpha, blk_slice, jt, jv, jd, it, 0, id);
 
+            // \partial_t v - linear, so vmult <=> form
+            this->M.vmult(tmp.block(0), tmp_src.block(0));
+            for (unsigned int jt = 0; jt < n_timesteps_at_once; ++jt)
+              for (unsigned int jd = 0; jd < blk_slice.n_timedofs(); ++jd)
+                internal::scatter(
+                  dst, tmp, this->Beta, blk_slice, 0, jt, jd, it, id);
 
-    void
-    scatter(BlockVectorType          &dst,
-            const BlockVectorType    &tmp,
-            const FullMatrix<Number> &matrix,
-            const BlockSlice         &blk_slice,
-            unsigned int              v,
-            unsigned int              jt,
-            unsigned int              jd,
-            unsigned int              it,
-            unsigned int              id) const
-    {
-      scatter(dst, tmp, matrix, blk_slice, jt, v, jd, it, v, id);
+            swap(slice, tmp_src);
+          }
     }
   };
-
 
   template <int dim>
   class Coefficient final : public Function<dim>
@@ -750,7 +975,9 @@ namespace dealii
                        const AffineConstraints<Number> &constraints,
                        const Quadrature<dim>           &quadrature,
                        const double                     mass_matrix_scaling,
-                       const double                     laplace_matrix_scaling)
+                       const double                     laplace_matrix_scaling,
+                       const Number                     delta0 = 0.0,
+                       const Number                     delta1 = 0.0)
       : mass_matrix_scaling(mass_matrix_scaling)
       , laplace_matrix_scaling(laplace_matrix_scaling)
       , has_mass_coefficient(false)
@@ -759,8 +986,16 @@ namespace dealii
       mass_matrix_coefficient.clear();
       laplace_matrix_coefficient.clear();
       typename MatrixFree<dim, Number>::AdditionalData additional_data;
+      internal::set_task_parallel_scheme<dim, Number>(
+        dof_handler.get_communicator(), additional_data);
       additional_data.mapping_update_flags =
         update_values | update_gradients | update_quadrature_points;
+      // Right now this is only to avoid errors when the operator is
+      // stabilized!
+      if (delta0 != 0.0 || delta1 != 0.0)
+        additional_data.mapping_update_flags_inner_faces =
+          update_values | update_gradients | update_normal_vectors |
+          update_quadrature_points;
 
       matrix_free.reinit(
         mapping, dof_handler, constraints, quadrature, additional_data);
@@ -784,16 +1019,11 @@ namespace dealii
 
     void
     compute_system_matrix(
-      SparseMatrixType                        &sparse_matrix,
-      dealii::AffineConstraints<Number> const *constraints = nullptr) const
+      SparseMatrixType                &sparse_matrix,
+      AffineConstraints<Number> const *constraints = nullptr) const
     {
       if (constraints == nullptr)
         constraints = &matrix_free.get_affine_constraints();
-      // compute_matrix(matrix_free,
-      //                *constraints,
-      //                sparse_matrix,
-      //                &MatrixFreeOperator::do_cell_integral_local,
-      //                this);
       MatrixFreeTools::compute_matrix(
         matrix_free,
         *constraints,
@@ -973,23 +1203,52 @@ namespace dealii
       const std::vector<const AffineConstraints<Number> *> &constraints,
       const std::vector<Quadrature<dim>>                   &quadrature,
       const Number                                          viscosity_,
-      std::set<types::boundary_id> const &weak_boundary_ids_ = {},
-      const Number                        h_                 = 1.0,
-      const Number                        penalty1_          = 20,
-      const Number                        penalty2_          = 10)
+      std::set<types::boundary_id> const &weak_boundary_ids_    = {},
+      std::set<types::boundary_id> const &outflow_boundary_ids_ = {},
+      const Number                        penalty1_             = 20,
+      const Number                        penalty2_             = 10,
+      const Number                        outflow_penalty_      = 0.0,
+      const Number                        delta0_               = 0.0,
+      const Number                        delta1_               = 0.0,
+      NonlinearTreatment nonlinear_treatment_ = NonlinearTreatment::None)
       : weak_boundary_ids(weak_boundary_ids_)
+      , outflow_boundary_ids(outflow_boundary_ids_)
       , viscosity(viscosity_)
-      , h(h_)
-      , gamma1(viscosity * penalty1_ / h)
-      , gamma2(penalty2_ / h)
+      , gamma1(viscosity * penalty1_)
+      , gamma2(penalty2_)
+      , beta(outflow_penalty_)
+      , delta0(delta0_)
+      , delta1(delta1_ == 0 ? 0.01 * delta0_ : delta1_)
+      , data_access_on_faces(
+          delta0 != 0.0 ?
+            MatrixFree<dim, Number>::DataAccessOnFaces::gradients :
+            MatrixFree<dim, Number>::DataAccessOnFaces::none)
+      , nonlinear_treatment(nonlinear_treatment_)
+      , nonlinear(nonlinear_treatment != NonlinearTreatment::None)
+      , loop_type(!weak_boundary_ids.empty() || delta0 != 0.0 ? LoopType::Full :
+                                                                LoopType::Cell)
     {
       typename MatrixFree<dim, Number>::AdditionalData additional_data;
+      internal::set_task_parallel_scheme<dim, Number>(
+        dof_handlers[0]->get_communicator(), additional_data);
       additional_data.mapping_update_flags = update_values | update_gradients;
       additional_data.mapping_update_flags_boundary_faces =
         update_values | update_gradients | update_normal_vectors |
         update_quadrature_points;
+      if (delta0 != 0.0)
+        additional_data.mapping_update_flags_inner_faces =
+          update_values | update_gradients | update_normal_vectors |
+          update_quadrature_points;
       matrix_free.reinit(
         mapping, dof_handlers, constraints, quadrature, additional_data);
+      get_h_face<dim, Number, dim>(h, matrix_free, 0);
+      if (nonlinear)
+        {
+          velocity_lin =
+            std::make_unique<FECellIntegratorU>(this->matrix_free, 0);
+          velocity_lin_face =
+            std::make_unique<FEFaceIntegratorU>(this->matrix_free, true, 0, 0);
+        }
     }
 
     template <typename Number2>
@@ -1018,52 +1277,43 @@ namespace dealii
     }
 
     void
+    form(BlockVectorType &dst, const BlockVectorType &src) const
+    {
+      if (!nonlinear)
+        vmult(dst, src);
+      else
+        dispatch_loop<OperatorMode::form>(dst, src);
+    }
+
+    void
     vmult(BlockVectorType &dst, const BlockVectorType &src) const
     {
-      if (!weak_boundary_ids.empty())
-        matrix_free.loop(&StokesMatrixFreeOperator::do_cell_integral_range,
-                         &StokesMatrixFreeOperator::do_face_integral_range,
-                         &StokesMatrixFreeOperator::do_boundary_integral_range,
-                         this,
-                         dst,
-                         src,
-                         true,
-                         MatrixFree<dim, Number>::DataAccessOnFaces::none,
-                         MatrixFree<dim, Number>::DataAccessOnFaces::none);
-      else
-        matrix_free.cell_loop(&StokesMatrixFreeOperator::do_cell_integral_range,
-                              this,
-                              dst,
-                              src,
-                              true);
+      if (nonlinear_treatment == NonlinearTreatment::None)
+        dispatch_loop<OperatorMode::none>(dst, src);
+      else if (nonlinear_treatment == NonlinearTreatment::Explicit)
+        dispatch_loop<OperatorMode::form>(dst, src);
+      else if (nonlinear_treatment == NonlinearTreatment::Implicit)
+        dispatch_loop<OperatorMode::jacobian>(dst, src);
     }
 
     void
     compute_system_matrix(
-      BlockSparseMatrixType                                 &sparse_matrix,
-      std::vector<const dealii::AffineConstraints<Number> *> constraints =
-        std::vector<const dealii::AffineConstraints<Number> *>()) const
+      BlockSparseMatrixType                         &sparse_matrix,
+      std::vector<const AffineConstraints<Number> *> constraints =
+        std::vector<const AffineConstraints<Number> *>()) const
     {
       if (constraints.empty())
-        constraints = std::vector<const dealii::AffineConstraints<Number> *>{
+        constraints = std::vector<const AffineConstraints<Number> *>{
           &matrix_free.get_affine_constraints(0),
           &matrix_free.get_affine_constraints(1)};
-      if (!weak_boundary_ids.empty())
-        MatrixFreeTools::compute_matrix(
-          matrix_free,
-          constraints,
-          sparse_matrix,
-          &StokesMatrixFreeOperator::do_cell_integral_local,
-          &StokesMatrixFreeOperator::do_face_integral_local,
-          &StokesMatrixFreeOperator::do_boundary_face_integral_local,
-          this);
-      else
-        MatrixFreeTools::compute_matrix(
-          matrix_free,
-          constraints,
-          sparse_matrix,
-          &StokesMatrixFreeOperator::do_cell_integral_local,
-          this);
+
+      if (nonlinear_treatment == NonlinearTreatment::None)
+        compute_matrix_helper<OperatorMode::none>(sparse_matrix, constraints);
+      else if (nonlinear_treatment == NonlinearTreatment::Explicit)
+        compute_matrix_helper<OperatorMode::form>(sparse_matrix, constraints);
+      else if (nonlinear_treatment == NonlinearTreatment::Implicit)
+        compute_matrix_helper<OperatorMode::jacobian>(sparse_matrix,
+                                                      constraints);
     }
 
     types::global_dof_index
@@ -1078,6 +1328,17 @@ namespace dealii
     {
       Assert(false, ExcNotImplemented());
       return 0.0;
+    }
+
+    void
+    set_data(BlockVectorSliceT<Number> data_slice) const
+    {
+      Assert(nonlinear, dealii::ExcMessage("not allowed"));
+      data_lin = data_slice;
+      AssertDimension(data_lin[0].get().size(),
+                      matrix_free.get_dof_handler(0).n_dofs());
+      AssertDimension(data_lin[1].get().size(),
+                      matrix_free.get_dof_handler(1).n_dofs());
     }
 
     Tensor<1, dim, Number>
@@ -1104,8 +1365,8 @@ namespace dealii
             {
               velocity.read_dof_values(v_v);
               pressure.read_dof_values(p_v);
-              velocity.evaluate(dealii::EvaluationFlags::gradients);
-              pressure.evaluate(dealii::EvaluationFlags::values);
+              velocity.evaluate(EvaluationFlags::gradients);
+              pressure.evaluate(EvaluationFlags::values);
               for (unsigned int q = 0; q < velocity.n_q_points; ++q)
                 {
                   auto p      = pressure.get_value(q);
@@ -1123,7 +1384,7 @@ namespace dealii
                   f[d] += scale * f_local[d][n];
             }
         }
-      f = dealii::Utilities::MPI::sum(f, mpi_comm);
+      f = Utilities::MPI::sum(f, mpi_comm);
       return f;
     }
 
@@ -1149,7 +1410,7 @@ namespace dealii
       auto divergence =
         std::accumulate(cell_vector.begin(), cell_vector.end(), 0.);
       auto const &mpi_comm = matrix_free.get_dof_handler().get_communicator();
-      divergence           = dealii::Utilities::MPI::sum(divergence, mpi_comm);
+      divergence           = Utilities::MPI::sum(divergence, mpi_comm);
       return std::sqrt(divergence);
     }
 
@@ -1167,7 +1428,7 @@ namespace dealii
           Number divergence = 0;
           velocity.reinit(cell);
           velocity.read_dof_values_plain(src);
-          velocity.evaluate(dealii::EvaluationFlags::gradients);
+          velocity.evaluate(EvaluationFlags::gradients);
           for (unsigned int q = 0; q < velocity.n_q_points; q++)
             {
               auto div_u = velocity.get_divergence(q);
@@ -1178,11 +1439,66 @@ namespace dealii
     }
 
   private:
+    enum class LoopType
+    {
+      Cell,
+      Full
+    };
+
+    template <OperatorMode mode>
+    void
+    dispatch_loop(BlockVectorType &dst, const BlockVectorType &src) const
+    {
+      if (loop_type == LoopType::Full)
+        matrix_free.loop(
+          &StokesMatrixFreeOperator::do_cell_integral_range<mode>,
+          &StokesMatrixFreeOperator::do_face_integral_range,
+          &StokesMatrixFreeOperator::do_boundary_integral_range,
+          this,
+          dst,
+          src,
+          true,
+          data_access_on_faces,
+          data_access_on_faces);
+      else if (loop_type == LoopType::Cell)
+        matrix_free.cell_loop(
+          &StokesMatrixFreeOperator::do_cell_integral_range<mode>,
+          this,
+          dst,
+          src,
+          true);
+    }
+
+    template <OperatorMode mode>
+    void
+    compute_matrix_helper(
+      BlockSparseMatrixType                                &sparse_matrix,
+      const std::vector<const AffineConstraints<Number> *> &constraints) const
+    {
+      if (!weak_boundary_ids.empty() || delta0 != 0.0)
+        MatrixFreeTools::compute_matrix(
+          matrix_free,
+          constraints,
+          sparse_matrix,
+          &StokesMatrixFreeOperator::do_cell_integral_local<mode>,
+          &StokesMatrixFreeOperator::do_face_integral_local,
+          &StokesMatrixFreeOperator::do_boundary_face_integral_local,
+          this);
+      else
+        MatrixFreeTools::compute_matrix(
+          matrix_free,
+          constraints,
+          sparse_matrix,
+          &StokesMatrixFreeOperator::do_cell_integral_local<mode>,
+          this);
+    };
+
     using FECellIntegratorP = FEEvaluation<dim, -1, 0, 1, Number>;
     using FECellIntegratorU = FEEvaluation<dim, -1, 0, dim, Number>;
     using FEFaceIntegratorP = FEFaceEvaluation<dim, -1, 0, 1, Number>;
     using FEFaceIntegratorU = FEFaceEvaluation<dim, -1, 0, dim, Number>;
 
+    template <OperatorMode op_mode = OperatorMode::none>
     void
     do_cell_integral_range(
       const MatrixFree<dim, Number>               &matrix_free,
@@ -1199,19 +1515,31 @@ namespace dealii
           pressure.reinit(cell);
           pressure.read_dof_values(src.block(1));
 
-          do_cell_integral_local(velocity, pressure);
+          do_cell_integral_local<op_mode>(velocity, pressure);
 
           velocity.distribute_local_to_global(dst.block(0));
           pressure.distribute_local_to_global(dst.block(1));
         }
     }
 
-
+    template <OperatorMode op_mode = OperatorMode::none>
     void
     do_cell_integral_local(FECellIntegratorU &velocity,
                            FECellIntegratorP &pressure) const
     {
-      velocity.evaluate(EvaluationFlags::gradients);
+      auto constexpr navier =
+        op_mode == OperatorMode::form || op_mode == OperatorMode::jacobian;
+      if (navier)
+        {
+          Assert(velocity_lin, ExcInternalError());
+          velocity_lin->reinit(velocity.get_current_cell_index());
+          velocity_lin->read_dof_values(data_lin[0].get());
+          velocity_lin->evaluate(EvaluationFlags::values);
+          velocity.evaluate(EvaluationFlags::values |
+                            EvaluationFlags::gradients);
+        }
+      else
+        velocity.evaluate(EvaluationFlags::gradients);
       pressure.evaluate(EvaluationFlags::values);
 
       for (unsigned int q = 0; q < velocity.n_q_points; ++q)
@@ -1223,6 +1551,22 @@ namespace dealii
           grad_u *= viscosity;
           for (unsigned int i = 0; i < dim; ++i)
             grad_u[i][i] -= p;
+          if constexpr (op_mode == OperatorMode::jacobian)
+            {
+              auto delta_u    = velocity.get_value(q);
+              auto u          = velocity_lin->get_value(q);
+              auto convection = outer_product(u, delta_u);
+              grad_u -= convection;
+              grad_u -= transpose(convection);
+            }
+          else if constexpr (op_mode == OperatorMode::form)
+            {
+              auto u       = velocity_lin->get_value(q);
+              auto delta_u = velocity.get_value(q);
+              grad_u -= outer_product(delta_u, u);
+            }
+          else
+            Assert(!nonlinear, ExcMessage("not implemented"));
           velocity.submit_gradient(grad_u, q);
         }
 
@@ -1231,17 +1575,62 @@ namespace dealii
     }
 
     void
-    do_face_integral_range(const MatrixFree<dim, Number> &,
-                           BlockVectorType &,
-                           const BlockVectorType &,
-                           const std::pair<unsigned int, unsigned int> &) const
-    {}
+    do_face_integral_range(
+      const MatrixFree<dim, Number>               &matrix_free,
+      BlockVectorType                             &dst,
+      const BlockVectorType                       &src,
+      const std::pair<unsigned int, unsigned int> &range) const
+    {
+      FEFaceIntegratorU u_in(matrix_free, true, 0, 0);
+      FEFaceIntegratorU u_ex(matrix_free, false, 0, 0);
+      FEFaceIntegratorP p_in(matrix_free, true, 1, 0);
+      FEFaceIntegratorP p_ex(matrix_free, false, 1, 0);
+      std::pair<FEFaceIntegratorU &, FEFaceIntegratorU &> u(u_in, u_ex);
+      std::pair<FEFaceIntegratorP &, FEFaceIntegratorP &> p(p_in, p_ex);
+
+      for (unsigned int face = range.first; face < range.second; ++face)
+        {
+          u_in.reinit(face);
+          u_ex.reinit(face);
+          u_in.read_dof_values(src.block(0));
+          u_ex.read_dof_values(src.block(0));
+
+          do_face_integral_local(u, p);
+
+          u_in.distribute_local_to_global(dst.block(0));
+          u_ex.distribute_local_to_global(dst.block(0));
+        }
+    }
 
     void
     do_face_integral_local(
-      std::pair<FEFaceIntegratorU &, FEFaceIntegratorU &> const &,
+      std::pair<FEFaceIntegratorU &, FEFaceIntegratorU &> const &u,
       std::pair<FEFaceIntegratorP &, FEFaceIntegratorP &> const &) const
-    {}
+    {
+      FEFaceIntegratorU &u_in = u.first;
+      FEFaceIntegratorU &u_ex = u.second;
+      Assert(u_in.is_interior_face(), ExcInternalError());
+      Assert(!u_ex.is_interior_face(), ExcInternalError());
+      auto degree = std::pow(u_in.dofs_per_component, 1.0 / dim) - 1;
+      auto pa     = degree * degree * degree * std::sqrt(degree);
+
+      auto face_in = u_in.get_cell_or_face_batch_id();
+      u_ex.evaluate(EvaluationFlags::gradients);
+      u_in.evaluate(EvaluationFlags::gradients | EvaluationFlags::values);
+      for (unsigned int q = 0; q < u_in.n_q_points; ++q)
+        {
+          auto normal  = u_in.normal_vector(q);
+          auto u       = u_in.get_value(q);
+          auto delta_K = delta0 * (h[face_in] * h[face_in] / pa) *
+                         (u * normal) * (u * normal);
+          auto jump_grad_u_n =
+            (u_in.get_gradient(q) - u_ex.get_gradient(q)) * normal;
+          u_ex.submit_normal_derivative(-delta_K * jump_grad_u_n, q);
+          u_in.submit_normal_derivative(delta_K * jump_grad_u_n, q);
+        }
+      u_in.integrate(EvaluationFlags::gradients);
+      u_ex.integrate(EvaluationFlags::gradients);
+    }
 
     void
     do_boundary_integral_range(
@@ -1270,24 +1659,68 @@ namespace dealii
     do_boundary_face_integral_local(FEFaceIntegratorU &velocity,
                                     FEFaceIntegratorP &pressure) const
     {
-      if (auto id = weak_boundary_ids.find(velocity.boundary_id());
-          id == weak_boundary_ids.end())
+      auto face      = velocity.get_cell_or_face_batch_id();
+      auto curr_b_id = velocity.boundary_id();
+      auto id        = weak_boundary_ids.find(curr_b_id),
+           o_id      = outflow_boundary_ids.find(curr_b_id);
+      if ((id == weak_boundary_ids.end()) ||
+          (o_id == outflow_boundary_ids.end()))
         {
           std::fill_n(velocity.begin_values(),
                       velocity.n_q_points * velocity.n_components,
                       Number(0.0));
           std::fill_n(velocity.begin_gradients(),
-                      velocity.n_q_points * dim * velocity.n_components,
+                      velocity.n_q_points * velocity.n_components *
+                        velocity.n_components,
                       Number(0.0));
           std::fill_n(pressure.begin_values(),
                       pressure.n_q_points * pressure.n_components,
                       Number(0.0));
-          std::fill_n(pressure.begin_gradients(),
-                      pressure.n_q_points * dim * pressure.n_components,
+        }
+      if (o_id != outflow_boundary_ids.end())
+        {
+          Assert(velocity_lin, ExcInternalError());
+          if (nonlinear)
+            {
+              velocity_lin_face->reinit(face);
+              velocity_lin_face->read_dof_values(data_lin[0].get());
+              velocity_lin_face->evaluate(EvaluationFlags::values);
+            }
+          velocity.evaluate(EvaluationFlags::values |
+                            EvaluationFlags::gradients);
+          pressure.evaluate(EvaluationFlags::values);
+          for (unsigned int q = 0; q < velocity.n_q_points; ++q)
+            {
+              auto grad_u = velocity.get_gradient(q);
+              auto normal = velocity.normal_vector(q);
+              auto b      = nonlinear ? velocity_lin_face->get_value(q) :
+                                        Tensor<1, dim, VectorizedArray<Number>>();
+              // according to Bertoglio & Caiazzo
+              auto grad_u_t = grad_u - outer_product(grad_u * normal, normal);
+              auto bfp      = 0.0 * 0.5 * h[face] * h[face] *
+                         std::min(b * normal, VectorizedArray<Number>(0)) *
+                         grad_u_t;
+              velocity.submit_gradient(bfp, q);
+              // Not strictly neccessary? - but it also doesn't hurt
+              auto dn = nonlinear ?
+                          -0.5 * beta *
+                            outer_product(b, velocity.get_value(q)) * normal :
+                          Tensor<1, dim, VectorizedArray<Number>>();
+              velocity.submit_value(dn, q);
+            }
+          std::fill_n(pressure.begin_values(),
+                      pressure.n_q_points * pressure.n_components,
                       Number(0.0));
         }
-      else
+      else if (id != weak_boundary_ids.end())
         {
+          if (nonlinear)
+            {
+              Assert(velocity_lin, ExcInternalError());
+              velocity_lin_face->reinit(face);
+              velocity_lin_face->read_dof_values(data_lin[0].get());
+              velocity_lin_face->evaluate(EvaluationFlags::values);
+            }
           velocity.evaluate(EvaluationFlags::values |
                             EvaluationFlags::gradients);
           pressure.evaluate(EvaluationFlags::values);
@@ -1296,10 +1729,18 @@ namespace dealii
               auto normal = velocity.normal_vector(q);
               auto grad_u = velocity.get_gradient(q);
               auto u      = velocity.get_value(q);
-              auto p      = pressure.get_value(q);
+
+              auto p = pressure.get_value(q);
 
               auto nitsche_u_1 = -viscosity * grad_u * normal + p * normal +
-                                 gamma1 * u + gamma2 * normal * (u * normal);
+                                 (gamma1 / h[face]) * u +
+                                 (gamma2 / h[face]) * normal * (u * normal);
+              if (nonlinear)
+                {
+                  auto b = velocity_lin_face->get_value(q);
+                  nitsche_u_1 -=
+                    std::min(b * normal, VectorizedArray<Number>(0)) * u;
+                }
               velocity.submit_value(nitsche_u_1, q);
               velocity.submit_normal_derivative(-viscosity * u, q);
               pressure.submit_value(-u * normal, q);
@@ -1309,11 +1750,19 @@ namespace dealii
       pressure.integrate(EvaluationFlags::values);
     }
 
-    MatrixFree<dim, Number>      matrix_free;
-    std::set<types::boundary_id> weak_boundary_ids{};
-    Number                       viscosity = 1.0;
-    Number                       h         = 1.0;
-    Number                       gamma1 = 20, gamma2 = 10;
+    MatrixFree<dim, Number>                    matrix_free;
+    mutable std::unique_ptr<FECellIntegratorU> velocity_lin;
+    mutable std::unique_ptr<FEFaceIntegratorU> velocity_lin_face;
+    mutable BlockVectorSliceT<Number>          data_lin;
+    std::set<types::boundary_id>               weak_boundary_ids{};
+    std::set<types::boundary_id>               outflow_boundary_ids{};
+    Number                                     viscosity = 1.0;
+    AlignedVector<VectorizedArray<Number>>     h;
+    Number gamma1 = 20, gamma2 = 10, beta = 0.0, delta0 = 0.0, delta1 = 0.0;
+    typename MatrixFree<dim, Number>::DataAccessOnFaces data_access_on_faces;
+    NonlinearTreatment                                  nonlinear_treatment;
+    bool                                                nonlinear;
+    LoopType                                            loop_type;
   };
 
   template <int dim, typename Number>
@@ -1329,15 +1778,17 @@ namespace dealii
       const std::vector<const AffineConstraints<Number> *> &constraints,
       const std::vector<Quadrature<dim>>                   &quadrature,
       const Number                                          viscosity_,
-      const Number                                          h_,
       const Number                                          penalty1_,
-      const Number                                          penalty2_)
+      const Number                                          penalty2_,
+      const bool                                            is_nonlinear)
       : viscosity(viscosity_)
-      , h(h_)
-      , gamma1(viscosity * penalty1_ / h)
-      , gamma2(penalty2_ / h)
+      , gamma1(viscosity * penalty1_)
+      , gamma2(penalty2_)
+      , nonlinear(is_nonlinear)
     {
       typename MatrixFree<dim, Number>::AdditionalData additional_data;
+      internal::set_task_parallel_scheme<dim, Number>(
+        dof_handlers[0]->get_communicator(), additional_data);
       additional_data.mapping_update_flags             = update_default;
       additional_data.mapping_update_flags_inner_faces = update_default;
       additional_data.mapping_update_flags_boundary_faces =
@@ -1345,11 +1796,12 @@ namespace dealii
         update_quadrature_points;
       matrix_free.reinit(
         mapping, dof_handlers, constraints, quadrature, additional_data);
+      get_h_face(h, matrix_free, 1);
     }
 
     void
     set_dirichlet_functions(
-      const std::map<types::boundary_id, dealii::Function<dim, Number> *>
+      const std::map<types::boundary_id, Function<dim, Number> *>
         &dirichlet_color_to_fun) const
     {
       this->dirichlet_color_to_fun = &dirichlet_color_to_fun;
@@ -1460,9 +1912,9 @@ namespace dealii
             {
               dv.resize(velocity.n_q_points);
               for (unsigned int q = 0; q < velocity.n_q_points; ++q)
-                internal::set_dirichlet_vector(dv[q],
-                                               velocity.quadrature_point(q),
-                                               *(g->second));
+                internal::set_vector(dv[q],
+                                     velocity.quadrature_point(q),
+                                     *(g->second));
             }
           else
             continue;
@@ -1470,9 +1922,13 @@ namespace dealii
           pressure.reinit(face);
           for (unsigned int q = 0; q < velocity.n_q_points; ++q)
             {
-              auto        normal = velocity.normal_vector(q);
-              auto const &g      = dv[q];
-              auto nitsche_u_1   = gamma1 * g + gamma2 * normal * (g * normal);
+              auto        normal      = velocity.normal_vector(q);
+              auto const &g           = dv[q];
+              auto        nitsche_u_1 = (gamma1 / h[face]) * g +
+                                 (gamma2 / h[face]) * normal * (g * normal);
+              if (nonlinear)
+                nitsche_u_1 -=
+                  std::min(g * normal, VectorizedArray<Number>(0)) * g;
               velocity.submit_value(nitsche_u_1, q);
               velocity.submit_normal_derivative(-viscosity * g, q);
               pressure.submit_value(-g * normal, q);
@@ -1485,16 +1941,166 @@ namespace dealii
         }
     }
 
-    mutable std::map<types::boundary_id, dealii::Function<dim, Number> *> const
-      *dirichlet_color_to_fun = nullptr;
-
-    MatrixFree<dim, Number> matrix_free;
-    Number                  viscosity = 1.0;
-    Number                  h         = 1.0;
-    Number                  gamma1 = 20, gamma2 = 10;
+    mutable std::map<types::boundary_id, Function<dim, Number> *> const
+                                          *dirichlet_color_to_fun = nullptr;
+    MatrixFree<dim, Number>                matrix_free;
+    Number                                 viscosity = 1.0;
+    Number                                 gamma1 = 20, gamma2 = 10;
+    bool                                   nonlinear;
+    AlignedVector<VectorizedArray<Number>> h;
   };
 
+  template <int dim,
+            typename Number,
+            typename PDEOperator,
+            typename JacOperator = PDEOperator>
+  class PDE
+  {
+    using BlockVectorType = BlockVectorT<Number>;
+    using VectorType      = VectorT<Number>;
 
+  public:
+    void
+    init(PDEOperator const &pde_operator, BlockVectorType const &rhs)
+    {
+      this->pde_operator = &pde_operator;
+      this->jac_operator = &pde_operator;
+      this->rhs          = &rhs;
+    }
+
+    void
+    init(PDEOperator const     &pde_operator,
+         JacOperator const     &jac_operator,
+         BlockVectorType const &rhs)
+    {
+      this->pde_operator = &pde_operator;
+      this->jac_operator = &jac_operator;
+      this->rhs          = &rhs;
+    }
+
+    void
+    set_rhs(BlockVectorType const &rhs) const
+    {
+      this->rhs = &rhs;
+    }
+
+    void
+    set_data(BlockVectorType const &data) const
+    {
+      this->pde_operator->set_data(data);
+      if (this->pde_operator != this->jac_operator)
+        this->jac_operator->set_data(data);
+    }
+
+    /// Residual, i.e. RHS - form.
+    void
+    residual(BlockVectorType       &dst,
+             BlockVectorType const &src,
+             BlockVectorType const &rhs) const
+    {
+      this->rhs = &rhs;
+      residual(dst, src);
+    }
+
+    /// Residual, i.e. RHS - form.
+    void
+    residual(BlockVectorType &dst, BlockVectorType const &src) const
+    {
+      form(dst, src);
+      dst *= -1.0;
+      dst.add(1.0, *this->rhs);
+    }
+
+    /// Evaluation of weak form.
+    void
+    form(BlockVectorType &dst, BlockVectorType const &src) const
+    {
+      if constexpr (internal::has_form<PDEOperator, Number>::value)
+        pde_operator->form(dst, src);
+      else
+        pde_operator->vmult(dst, src);
+    }
+
+    /// vmult with Jacobian.
+    void
+    vmult(BlockVectorType &dst, BlockVectorType const &src) const
+    {
+      jac_operator->vmult(dst, src);
+    }
+
+    template <typename Number2>
+    void
+    initialize_dof_vector(VectorT<Number2> &vec, unsigned int i = 0) const
+    {
+      pde_operator->initialize_dof_vector(vec, i);
+    }
+
+    template <typename Number2>
+    void
+    initialize_dof_vector(BlockVectorT<Number2> &vec) const
+    {
+      pde_operator->initialize_dof_vector(vec);
+    }
+
+
+  private:
+    mutable BlockVectorType const *rhs;
+    PDEOperator const             *pde_operator;
+    JacOperator const             *jac_operator;
+  };
+
+  template <int dim, typename Number>
+  using NavierStokesOperator =
+    PDE<dim,
+        Number,
+        SystemMatrixStokes<dim,
+                           Number,
+                           StokesMatrixFreeOperator<dim, Number>,
+                           MatrixFreeOperatorVector<dim, Number>>,
+        SystemMatrixStokes<dim,
+                           Number,
+                           StokesMatrixFreeOperator<dim, Number>,
+                           MatrixFreeOperatorVector<dim, Number>>>;
+
+  template <int dim, typename Number>
+  using StokesOperator =
+    PDE<dim,
+        Number,
+        SystemMatrixStokes<dim,
+                           Number,
+                           StokesMatrixFreeOperator<dim, Number>,
+                           MatrixFreeOperatorVector<dim, Number>>,
+        SystemMatrixStokes<dim,
+                           Number,
+                           StokesMatrixFreeOperator<dim, Number>,
+                           MatrixFreeOperatorVector<dim, Number>>>;
+
+  template <int dim, typename Number>
+  using AcousticWaveOperator =
+    PDE<dim,
+        Number,
+        SystemMatrix<dim,
+                     Number,
+                     MatrixFreeOperatorScalar<dim, Number>,
+                     MatrixFreeOperatorScalar<dim, Number>>,
+        SystemMatrix<dim,
+                     Number,
+                     MatrixFreeOperatorScalar<dim, Number>,
+                     MatrixFreeOperatorScalar<dim, Number>>>;
+
+  template <int dim, typename Number>
+  using HeatOperator = PDE<dim,
+                           Number,
+                           SystemMatrix<dim,
+                                        Number,
+                                        MatrixFreeOperatorScalar<dim, Number>,
+                                        MatrixFreeOperatorScalar<dim, Number>>,
+                           SystemMatrix<dim,
+                                        Number,
+                                        MatrixFreeOperatorScalar<dim, Number>,
+                                        MatrixFreeOperatorScalar<dim, Number>>>;
+
+  template <typename Number>
   void
   boundary_values_map_to_constraints(
     AffineConstraints<Number>                       &constraints,
@@ -1510,6 +2116,7 @@ namespace dealii
         }
   }
 
+  template <typename Number>
   void
   set_inhomogeneity(
     VectorT<Number>                                 &v,
@@ -1521,6 +2128,8 @@ namespace dealii
 
     v.update_ghost_values();
   }
+
+  template <typename Number>
   void
   set_inhomogeneity_zero(
     VectorT<Number>                                 &v,
@@ -1533,6 +2142,7 @@ namespace dealii
     v.update_ghost_values();
   }
 
+  template <typename Number>
   void
   set_inhomogeneity(BlockVectorT<Number> &v,
                     const std::vector<std::map<types::global_dof_index, Number>>
@@ -1543,6 +2153,7 @@ namespace dealii
       set_inhomogeneity(v.block(i), boundary_values[i]);
   }
 
+  template <typename Number>
   void
   set_inhomogeneity_zero(
     BlockVectorT<Number> &v,
@@ -1559,12 +2170,12 @@ namespace dealii
   get_inhomogeneous_boundary(
     const Mapping<dim>    &mapping,
     const DoFHandler<dim> &dof,
-    std::map<types::boundary_id, const dealii::Function<dim, Number> *> const
+    std::map<types::boundary_id, const Function<dim, Number> *> const
                         &dirichlet_color_to_fun,
     const ComponentMask &mask = {})
   {
     std::map<types::global_dof_index, Number> boundary_values;
-    dealii::VectorTools::interpolate_boundary_values(
+    VectorTools::interpolate_boundary_values(
       mapping, dof, dirichlet_color_to_fun, boundary_values, mask);
 
     return boundary_values;
@@ -1579,7 +2190,7 @@ namespace dealii
     TimeStepType                                            type,
     unsigned int                                            var,
     const BlockSlice                                       &blk_slice,
-    std::map<types::boundary_id, dealii::Function<dim, Number> *> const
+    std::map<types::boundary_id, Function<dim, Number> *> const
                           &dirichlet_color_to_fun,
     const Mapping<dim>    &mapping,
     const DoFHandler<dim> &dof,
@@ -1590,7 +2201,7 @@ namespace dealii
     auto qt    = get_time_quad(type,
                             blk_slice.n_timedofs() -
                               (type == TimeStepType::DG ? 1 : 0));
-    std::map<types::boundary_id, const dealii::Function<dim, Number> *>
+    std::map<types::boundary_id, const Function<dim, Number> *>
       dirichlet_color_to_fun_;
     for (const auto &pair : dirichlet_color_to_fun)
       dirichlet_color_to_fun_.insert(

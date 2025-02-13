@@ -4,7 +4,7 @@ This repository contains the implementation of a space-time multigrid method bas
 
 ## Usage
 
-The code depends on a recent version of the `deal.II` library. We recommend using version `9.5.2` or a more recent one. To run the examples and replicate the results the scripts may need to be adapted to your system.
+The code depends on a recent version of the `deal.II` library. We recommend using version `9.6` or a more recent one. To run the examples and replicate the results the scripts may need to be adapted to your system. To run the Stokes examples you need to checkout this [deal.II fork](https://github.com/nlsmrg/dealii/tree/generalize_compute_matrix) until [this PR](https://github.com/dealii/dealii/pull/17732) is merged.
 
 ## License
 

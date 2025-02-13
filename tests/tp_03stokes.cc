@@ -52,6 +52,7 @@ test(dealii::ConditionalOStream &pcout,
     stokes::Parameters stokes_parameters;
     if (parameters.additional_file != "")
       stokes_parameters.parse(parameters.additional_file);
+
     const bool print_timing      = parameters.print_timing;
     const bool space_time_mg     = parameters.space_time_mg;
     const bool time_before_space = parameters.time_before_space;
@@ -84,7 +85,8 @@ test(dealii::ConditionalOStream &pcout,
     else
       fe_p = std::make_unique<FE_Q<dim>>(fe_degree);
 
-    QGauss<dim>                  quad_u(fe_u.tensor_degree() + 1);
+    auto                         n_q_p = fe_u.tensor_degree() + 1u;
+    QGauss<dim>                  quad_u(n_q_p);
     QGauss<dim>                  quad_p(fe_p->tensor_degree() + 1);
     std::vector<Quadrature<dim>> quads{quad_u, quad_p};
     std::vector<Quadrature<dim>> quads_u{quad_u, quad_u};
@@ -96,25 +98,27 @@ test(dealii::ConditionalOStream &pcout,
       {&dof_handler_u, &dof_handler_p});
 
     setup_triangulation(tria, parameters);
-    double spc_step = GridTools::minimal_cell_diameter(tria) / std::sqrt(dim);
 
-    double step_    = GridTools::maximal_cell_diameter(tria) / std::sqrt(dim);
     double time     = 0.;
     double time_len = parameters.end_time - time;
-    unsigned int n_steps  = static_cast<unsigned int>((time_len) / step_);
-    double time_step_size = time_len * pow(2.0, -(refinement + 1)) / n_steps;
+    double step_ = std::min(GridTools::minimal_cell_diameter(tria), time_len);
+    Assert(numbers::is_finite(time_len) && time_len > 0, ExcInternalError());
+    unsigned int n_steps        = static_cast<unsigned int>(time_len / step_);
+    int          t_refinement   = refinement + 1;
+    double       time_step_size = time_len * pow(2.0, -t_refinement) / n_steps;
 
     double viscosity = stokes_parameters.viscosity;
     tria.refine_global(refinement);
     if (parameters.grid_descriptor != "hyperRectangle")
       tria.reset_manifold(tfi_manifold_id);
-    spc_step = GridTools::minimal_cell_diameter(tria) / std::sqrt(dim);
     if (parameters.distort_grid != 0.0)
       GridTools::distort_random(parameters.distort_grid, tria);
     dof_handler_u.distribute_dofs(fe_u);
     dof_handler_p.distribute_dofs(*fe_p);
 
     std::set<types::boundary_id> weak_boundary_ids{};
+    std::set<types::boundary_id> outflow_boundary_ids =
+      get_outflow_boundaries(parameters, stokes_parameters);
     auto [d, d_map] =
       get_dirichlet_function<Number>(parameters, stokes_parameters);
     if (parameters.nitsche_boundary)
@@ -169,15 +173,19 @@ test(dealii::ConditionalOStream &pcout,
           << dof_handler_p.get_fe().n_dofs_per_cell() << "\n";
 
     // matrix-free operators
-    StokesMatrixFreeOperator<dim, Number> Stokes_mf(mapping,
-                                                    dof_handlers,
-                                                    constraints,
-                                                    quads_u,
-                                                    viscosity,
-                                                    weak_boundary_ids,
-                                                    spc_step,
-                                                    stokes_parameters.penalty1,
-                                                    stokes_parameters.penalty2);
+    StokesMatrixFreeOperator<dim, Number> Stokes_mf(
+      mapping,
+      dof_handlers,
+      constraints,
+      quads_u,
+      viscosity,
+      weak_boundary_ids,
+      outflow_boundary_ids,
+      stokes_parameters.penalty1,
+      stokes_parameters.penalty2,
+      stokes_parameters.outflow_penalty,
+      stokes_parameters.delta0,
+      stokes_parameters.delta1);
     using Nitsche = StokesNitscheMatrixFreeOperator<dim, Number>;
     std::unique_ptr<Nitsche> Stokes_nitsche_mf =
       std::make_unique<Nitsche>(mapping,
@@ -185,23 +193,31 @@ test(dealii::ConditionalOStream &pcout,
                                 constraints,
                                 quads_u,
                                 viscosity,
-                                spc_step,
                                 stokes_parameters.penalty1,
-                                stokes_parameters.penalty2);
+                                stokes_parameters.penalty2,
+                                parameters.is_nonlinear);
 
-    MatrixFreeOperatorVector<dim, Number> M_mf(
-      mapping, dof_handler_u, constraints_u, quad_u, 1.0, 0.0);
+    MatrixFreeOperatorVector<dim, Number> M_mf(mapping,
+                                               dof_handler_u,
+                                               constraints_u,
+                                               quad_u,
+                                               1.0,
+                                               0.0,
+                                               stokes_parameters.delta0,
+                                               stokes_parameters.delta1);
 
     // We need the case n_timesteps_at_once=1 matrices always for the
     // integration of the source f
 
     auto [Alpha_1, Beta_1, Gamma_1, Zeta_1] =
+      get_fe_time_weights_stokes<Number>(
+        parameters.type, fe_degree, time_step_size, 1, 0.0);
+    auto [Alpha, Beta, Gamma, Zeta] =
       get_fe_time_weights_stokes<Number>(parameters.type,
                                          fe_degree,
                                          time_step_size,
-                                         1);
-    auto [Alpha, Beta, Gamma, Zeta] = get_fe_time_weights_stokes<Number>(
-      parameters.type, fe_degree, time_step_size, n_timesteps_at_once);
+                                         n_timesteps_at_once,
+                                         parameters.delta_time);
 
     TimerOutput timer(pcout,
                       TimerOutput::never,
@@ -240,7 +256,9 @@ test(dealii::ConditionalOStream &pcout,
                                    locally_relevant_dofs_u,
                                    locally_relevant_dofs_p,
                                    constraints_u,
-                                   constraints_p);
+                                   constraints_p,
+                                   (stokes_parameters.delta0 != 0.0) ||
+                                     (stokes_parameters.delta1 != 0.0));
 
     auto stokes_matrix = std::make_shared<BlockSparseMatrixType>();
     auto M             = std::make_shared<BlockSparseMatrixType>();
@@ -277,7 +295,7 @@ test(dealii::ConditionalOStream &pcout,
                            fe_degree_min,
                            parameters.poly_coarsening);
     auto poly_mg_sequence_space =
-      get_poly_mg_sequence(fe_degree,
+      get_poly_mg_sequence(fe_p->tensor_degree(),
                            parameters.fe_degree_min_space,
                            parameters.poly_coarsening);
 
@@ -318,275 +336,11 @@ test(dealii::ConditionalOStream &pcout,
     auto p_seq = get_precondition_stmg_types(mg_type_level,
                                              parameters.coarsening_type,
                                              parameters.time_before_space,
-                                             parameters.space_time_level_first);
+                                             parameters.space_time_level_first,
+                                             parameters.mg_data.smoother);
     for (auto mgt : p_seq)
       pcout << mgt << ' ';
     pcout << std::endl;
-
-
-    MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers_u(
-      min_level, max_level);
-    MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers_p(
-      min_level, max_level);
-    MGLevelObject<std::vector<const DoFHandler<dim> *>> mg_dof_handlers(
-      min_level, max_level);
-
-    MGLevelObject<std::shared_ptr<
-      const MatrixFreeOperatorVector<dim, NumberPreconditioner>>>
-      mg_M_mf(min_level, max_level);
-    MGLevelObject<std::shared_ptr<
-      const StokesMatrixFreeOperator<dim, NumberPreconditioner>>>
-      mg_Stokes_mf(min_level, max_level);
-
-    MGLevelObject<
-      std::shared_ptr<const AffineConstraints<NumberPreconditioner>>>
-      mg_constraints_u(min_level, max_level);
-    MGLevelObject<
-      std::shared_ptr<const AffineConstraints<NumberPreconditioner>>>
-      mg_constraints_p(min_level, max_level);
-    MGLevelObject<
-      std::vector<const dealii::AffineConstraints<NumberPreconditioner> *>>
-      mg_constraints(min_level, max_level);
-#ifdef MATRIX_BASED
-    MGLevelObject<std::shared_ptr<const SystemNP_M>> mg_operators(min_level,
-                                                                  max_level);
-    MGLevelObject<std::shared_ptr<const BlockSparseMatrixType>>
-      mg_stokes_operators(min_level, max_level);
-    MGLevelObject<std::shared_ptr<const BlockSparseMatrixType>>
-      mg_mass_operators(min_level, max_level);
-#else
-    MGLevelObject<std::shared_ptr<const SystemNP>> mg_operators(min_level,
-                                                                max_level);
-#endif
-    MGLevelObject<std::shared_ptr<PreconditionVanka<NumberPreconditioner>>>
-      precondition_vanka(min_level, max_level);
-    std::vector<std::array<FullMatrix<NumberPreconditioner>, 4>> fetw;
-    fetw = get_fe_time_weights<NumberPreconditioner>(
-      parameters.type,
-      time_step_size,
-      n_timesteps_at_once,
-      mg_type_level,
-      poly_mg_sequence_time,
-      get_fe_time_weights_stokes<NumberPreconditioner>);
-    Table<2, bool> K_mask;
-    Table<2, bool> M_mask(2, 2);
-    M_mask.fill(false);
-    M_mask(0, 0)                   = true;
-    unsigned int const n_levels    = mg_dof_handlers.n_levels();
-    unsigned int const n_variables = dof_handlers.size();
-
-    std::vector<BlockSlice> blk_indices =
-      get_blk_indices(parameters.type,
-                      n_timesteps_at_once,
-                      n_variables,
-                      n_levels,
-                      mg_type_level,
-                      poly_mg_sequence_time);
-
-    Assert(fe_pmg.size() == poly_mg_sequence_space.size(), ExcInternalError());
-    auto fe_ = parameters.use_pmg ? fe_pmg.begin() : fe_pmg.end() - 1;
-    for (unsigned int l = min_level, i = 0; l <= max_level; ++l, ++i)
-      {
-        auto dof_handler_p_ =
-          std::make_shared<DoFHandler<dim>>(*mg_triangulations[l]);
-        auto dof_handler_u_ =
-          std::make_shared<DoFHandler<dim>>(*mg_triangulations[l]);
-
-        auto constraints_p_ =
-          std::make_shared<AffineConstraints<NumberPreconditioner>>();
-        auto constraints_u_ =
-          std::make_shared<AffineConstraints<NumberPreconditioner>>();
-        Assert(fe_->size() == 2, ExcInternalError());
-        auto const &fe_p_ = *(*fe_)[1];
-        auto const &fe_u_ = *(*fe_)[0];
-        AssertDimension(fe_u_.tensor_degree() - 1, fe_p_.tensor_degree());
-        QGauss<dim>                  quad_u_(fe_u_.tensor_degree() + 1);
-        std::vector<Quadrature<dim>> quads_u_{quad_u_, quad_u_};
-        dof_handler_p_->distribute_dofs(fe_p_);
-        dof_handler_u_->distribute_dofs(fe_u_);
-
-        if (parameters.use_pmg && i < mg_type_level.size() &&
-            mg_type_level[i] == MGType::p)
-          ++fe_;
-        IndexSet locally_relevant_dofs_u_;
-        IndexSet locally_relevant_dofs_p_;
-        DoFTools::extract_locally_relevant_dofs(*dof_handler_u_,
-                                                locally_relevant_dofs_u_);
-        DoFTools::extract_locally_relevant_dofs(*dof_handler_p_,
-                                                locally_relevant_dofs_p_);
-        constraints_u_->reinit(dof_handler_u_->locally_owned_dofs(),
-                               locally_relevant_dofs_u_);
-        constraints_p_->reinit(dof_handler_p_->locally_owned_dofs(),
-                               locally_relevant_dofs_p_);
-#ifndef CHECK_COMPUTE_SYSTEM_MATRIX
-        setup_constraints_up(*constraints_u_,
-                             *constraints_p_,
-                             *dof_handler_u_,
-                             *dof_handler_p_,
-                             parameters,
-                             stokes_parameters);
-        if (!parameters.nitsche_boundary)
-          DoFTools::make_zero_boundary_constraints(*dof_handler_u_,
-                                                   0,
-                                                   *constraints_u_);
-#endif
-        constraints_u_->close();
-        constraints_p_->close();
-
-        // matrix-free operators
-        mg_dof_handlers_u[l] = dof_handler_u_;
-        mg_dof_handlers_p[l] = dof_handler_p_;
-        mg_dof_handlers[l]   = {dof_handler_u_.get(), dof_handler_p_.get()};
-        mg_constraints_u[l]  = constraints_u_;
-        mg_constraints_p[l]  = constraints_p_;
-        mg_constraints[l]    = {constraints_u_.get(), constraints_p_.get()};
-        spc_step = GridTools::minimal_cell_diameter(*mg_triangulations[l]) /
-                   std::sqrt(dim);
-        auto Stokes_mf_ =
-          std::make_shared<StokesMatrixFreeOperator<dim, NumberPreconditioner>>(
-            mapping,
-            mg_dof_handlers[l],
-            mg_constraints[l],
-            quads_u_,
-            viscosity,
-            weak_boundary_ids,
-            spc_step);
-        auto M_mf_ =
-          std::make_shared<MatrixFreeOperatorVector<dim, NumberPreconditioner>>(
-            mapping,
-            *mg_dof_handlers_u[l],
-            *mg_constraints_u[l],
-            quad_u_,
-            1.0,
-            0.0);
-
-        auto const &lhs_uK_p = fetw[l][0];
-        auto const &lhs_uM_p = fetw[l][1];
-
-        auto Stokes = std::make_shared<BlockSparseMatrixType>();
-        auto M      = std::make_shared<BlockSparseMatrixType>();
-        AffineConstraints<NumberPreconditioner> empty_constraints_p(
-          dof_handler_p_->locally_owned_dofs(), locally_relevant_dofs_p_);
-        AffineConstraints<NumberPreconditioner> empty_constraints_u(
-          dof_handler_u_->locally_owned_dofs(), locally_relevant_dofs_u_);
-        DoFTools::make_hanging_node_constraints(*dof_handler_u_,
-                                                empty_constraints_u);
-        DoFTools::make_hanging_node_constraints(*dof_handler_p_,
-                                                empty_constraints_p);
-        empty_constraints_u.close();
-        empty_constraints_p.close();
-        auto sparsity_pattern =
-          stokes::get_sparsity_pattern(*dof_handler_u_,
-                                       *dof_handler_p_,
-                                       locally_relevant_dofs_u_,
-                                       locally_relevant_dofs_p_,
-                                       empty_constraints_u,
-                                       empty_constraints_p);
-
-        // create Stokes matrix
-        Stokes->reinit(*sparsity_pattern);
-        Stokes_mf_->compute_system_matrix(
-          *Stokes,
-          std::vector<const dealii::AffineConstraints<NumberPreconditioner> *>{
-            &empty_constraints_u, &empty_constraints_p});
-        //  create vector-valued mass matrix
-        M->reinit(sparsity_pattern->n_block_rows(),
-                  sparsity_pattern->n_block_cols());
-        M->block(0, 0).reinit(sparsity_pattern->block(0, 0));
-        M_mf_->compute_system_matrix(M->block(0, 0), &empty_constraints_u);
-#ifdef CHECK_COMPUTE_SYSTEM_MATRIX
-        if constexpr (std::is_same_v<double, NumberPreconditioner>)
-          {
-            BlockVectorT<NumberPreconditioner> src(2);
-            BlockVectorT<NumberPreconditioner> dst(2);
-            BlockVectorT<NumberPreconditioner> dst2(2);
-            Stokes_mf_->initialize_dof_vector(src);
-            Stokes_mf_->initialize_dof_vector(dst);
-            Stokes_mf_->initialize_dof_vector(dst2);
-            for (unsigned int iv = 0; iv < 2; ++iv)
-              {
-                for (unsigned int i = 0; i < src.block(iv).size(); ++i)
-                  {
-                    src              = 0.0;
-                    src.block(iv)(i) = 1.0;
-                    Stokes_mf_->vmult(dst, src);
-                    Stokes->vmult(dst2, src);
-                    dst.add(-1.0, dst2);
-                    if (dst.l2_norm() >= 1.e-16)
-                      throw ExcInternalError();
-                  }
-              }
-            for (unsigned int i = 0; i < src.block(0).size(); ++i)
-              {
-                src             = 0.0;
-                src.block(0)(i) = 1.0;
-                M_mf_->vmult(dst.block(0), src.block(0));
-                M->block(0, 0).vmult(dst2.block(0), src.block(0));
-                dst.block(0).add(-1.0, dst2.block(0));
-                if (dst.l2_norm() >= 1.e-16)
-                  throw ExcInternalError();
-              }
-          }
-#endif
-        mg_M_mf[l]      = M_mf_;
-        mg_Stokes_mf[l] = Stokes_mf_;
-        precondition_vanka[l] =
-          std::make_shared<PreconditionVanka<NumberPreconditioner>>(
-            timer,
-            Stokes,
-            M,
-            sparsity_pattern,
-            lhs_uK_p,
-            lhs_uM_p,
-            mg_dof_handlers[l],
-            blk_indices[i],
-            K_mask,
-            M_mask);
-#ifdef MATRIX_BASED
-        *Stokes = 0;
-        Stokes_mf_->compute_system_matrix(*Stokes, mg_constraints[l]);
-        *M = 0;
-        M_mf_->compute_system_matrix(M->block(0, 0), mg_constraints[l][0]);
-        mg_stokes_operators[l] = Stokes;
-        mg_mass_operators[l]   = M;
-        mg_operators[l]        = std::make_shared<SystemNP_M>(
-          timer, *Stokes, M->block(0, 0), lhs_uK_p, lhs_uM_p, blk_indices[i]);
-#else
-        mg_operators[l] = std::make_shared<SystemNP>(
-          timer, *Stokes_mf_, *M_mf_, lhs_uK_p, lhs_uM_p, blk_indices[i]);
-#endif
-      }
-    if (parameters.use_pmg)
-      Assert(fe_ == fe_pmg.end() - 1, ExcInternalError());
-    std::unique_ptr<BlockVectorT<NumberPreconditioner>> tmp1, tmp2;
-    if (!std::is_same_v<Number, NumberPreconditioner>)
-      {
-        tmp1 = std::make_unique<BlockVectorT<NumberPreconditioner>>();
-        tmp2 = std::make_unique<BlockVectorT<NumberPreconditioner>>();
-        matrix->initialize_dof_vector(*tmp1);
-        matrix->initialize_dof_vector(*tmp2);
-      }
-#ifdef MATRIX_BASED
-    using Preconditioner = GMG<dim, Number, SystemNP_M>;
-#else
-    using Preconditioner = GMG<dim, NumberPreconditioner, SystemNP>;
-#endif
-    std::unique_ptr<Preconditioner> preconditioner =
-      std::make_unique<Preconditioner>(timer,
-                                       parameters,
-                                       n_timesteps_at_once,
-                                       mg_type_level,
-                                       poly_mg_sequence_time,
-                                       dof_handlers,
-                                       mg_dof_handlers,
-                                       mg_constraints,
-                                       mg_operators,
-                                       precondition_vanka,
-                                       std::move(tmp1),
-                                       std::move(tmp2));
-    preconditioner->reinit();
-    //
-    /// GMG
 
     std::unique_ptr<Function<dim, Number>> rhs_function_u, rhs_function_p;
     std::unique_ptr<Function<dim, Number>> exact_solution_u, exact_solution_p;
@@ -596,8 +350,8 @@ test(dealii::ConditionalOStream &pcout,
           std::make_unique<stokes::ExactSolutionU<dim, Number>>();
         exact_solution_p =
           std::make_unique<stokes::ExactSolutionP<dim, Number>>();
-        rhs_function_u =
-          std::make_unique<stokes::RHSFunction<dim, Number>>(viscosity);
+        rhs_function_u = std::make_unique<stokes::RHSFunction<dim, Number>>(
+          viscosity, parameters.is_nonlinear);
         rhs_function_p =
           std::make_unique<Functions::ZeroFunction<dim, Number>>(1);
       }
@@ -612,13 +366,9 @@ test(dealii::ConditionalOStream &pcout,
         rhs_function_p =
           std::make_unique<Functions::ZeroFunction<dim, Number>>(1);
       }
-    auto integrate_rhs_function_u = [&mapping,
-                                     &dof_handlers,
-                                     &quads,
-                                     &rhs_function_u,
-                                     &constraints,
-                                     &parameters](const double time,
-                                                  VectorType  &rhs) -> void {
+    auto integrate_rhs_function_u =
+      [&mapping, &dof_handlers, &quads, &rhs_function_u, &constraints](
+        const double time, VectorType &rhs) -> void {
       rhs_function_u->set_time(time);
       rhs = 0.0;
       if (is_zero_function(rhs_function_u.get()))
@@ -630,13 +380,9 @@ test(dealii::ConditionalOStream &pcout,
                                           rhs,
                                           *constraints[0]);
     };
-    auto integrate_rhs_function_p = [&mapping,
-                                     &dof_handlers,
-                                     &quads,
-                                     &rhs_function_p,
-                                     &constraints,
-                                     &parameters](const double time,
-                                                  VectorType  &rhs) -> void {
+    auto integrate_rhs_function_p =
+      [&mapping, &dof_handlers, &quads, &rhs_function_p, &constraints](
+        const double time, VectorType &rhs) -> void {
       rhs_function_p->set_time(time);
       rhs = 0.0;
       if (is_zero_function(rhs_function_p.get()))
@@ -722,24 +468,325 @@ test(dealii::ConditionalOStream &pcout,
     BlockVectorType                        x, rhs, residual;
     LinearAlgebra::ReadWriteVector<Number> cell_vector(tria.n_active_cells());
     matrix->initialize_dof_vector(x);
+    // interpolate initial value
+    evaluate_exact_solution_u(
+      0, x.block(blk_slice.index(n_timesteps_at_once - 1, 0, nt_dofs - 1)));
+    evaluate_exact_solution_p(
+      0, x.block(blk_slice.index(n_timesteps_at_once - 1, 1, nt_dofs - 1)));
     matrix->initialize_dof_vector(rhs);
     matrix->initialize_dof_vector(residual);
-    std::set<types::boundary_id> obstacle_id{2};
 
-    BlockVectorType prev_x(2);
+    MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers_u(
+      min_level, max_level);
+    MGLevelObject<std::shared_ptr<const DoFHandler<dim>>> mg_dof_handlers_p(
+      min_level, max_level);
+    MGLevelObject<std::vector<const DoFHandler<dim> *>> mg_dof_handlers(
+      min_level, max_level);
+
+    MGLevelObject<std::shared_ptr<
+      const MatrixFreeOperatorVector<dim, NumberPreconditioner>>>
+      mg_M_mf(min_level, max_level);
+    MGLevelObject<std::shared_ptr<
+      const StokesMatrixFreeOperator<dim, NumberPreconditioner>>>
+      mg_Stokes_mf(min_level, max_level);
+
+    MGLevelObject<
+      std::shared_ptr<const AffineConstraints<NumberPreconditioner>>>
+      mg_constraints_u(min_level, max_level);
+    MGLevelObject<
+      std::shared_ptr<const AffineConstraints<NumberPreconditioner>>>
+      mg_constraints_p(min_level, max_level);
+    MGLevelObject<
+      std::vector<const dealii::AffineConstraints<NumberPreconditioner> *>>
+      mg_constraints(min_level, max_level);
+    MGLevelObject<
+      std::shared_ptr<const AffineConstraints<NumberPreconditioner>>>
+      mg_empty_constraints_u(min_level, max_level);
+    MGLevelObject<
+      std::shared_ptr<const AffineConstraints<NumberPreconditioner>>>
+      mg_empty_constraints_p(min_level, max_level);
+    MGLevelObject<
+      std::vector<const dealii::AffineConstraints<NumberPreconditioner> *>>
+      mg_empty_constraints(min_level, max_level);
+    MGLevelObject<BlockVectorT<NumberPreconditioner>> mg_solution_vector(
+      min_level, max_level);
+    MGLevelObject<BlockVectorSliceT<NumberPreconditioner>> mg_slice_vector(
+      min_level, max_level);
+#ifdef MATRIX_BASED
+    MGLevelObject<std::shared_ptr<const SystemNP_M>> mg_operators(min_level,
+                                                                  max_level);
+#else
+    MGLevelObject<std::shared_ptr<const SystemNP>> mg_operators(min_level,
+                                                                max_level);
+#endif
+    MGLevelObject<std::shared_ptr<BlockSparseMatrixType>> mg_stokes_operators(
+      min_level, max_level);
+    MGLevelObject<std::shared_ptr<BlockSparseMatrixType>> mg_mass_operators(
+      min_level, max_level);
+    MGLevelObject<std::shared_ptr<PreconditionVanka<NumberPreconditioner>>>
+      precondition_vanka(min_level, max_level);
+    std::vector<std::array<FullMatrix<NumberPreconditioner>, 4>> fetw;
+    fetw = get_fe_time_weights<NumberPreconditioner>(
+      parameters.type,
+      time_step_size,
+      n_timesteps_at_once,
+      parameters.delta_time,
+      mg_type_level,
+      poly_mg_sequence_time,
+      get_fe_time_weights_stokes<NumberPreconditioner>);
+    Table<2, bool> K_mask;
+    Table<2, bool> M_mask(2, 2);
+    M_mask.fill(false);
+    M_mask(0, 0)                   = true;
+    unsigned int const n_levels    = mg_dof_handlers.n_levels();
+    unsigned int const n_variables = dof_handlers.size();
+
+    std::vector<BlockSlice> blk_indices =
+      get_blk_indices(parameters.type,
+                      n_timesteps_at_once,
+                      n_variables,
+                      n_levels,
+                      mg_type_level,
+                      poly_mg_sequence_time);
+
+    Assert(fe_pmg.size() == poly_mg_sequence_space.size(), ExcInternalError());
+    auto fe_ = parameters.use_pmg ? fe_pmg.begin() : fe_pmg.end() - 1;
+    for (unsigned int l = min_level, i = 0; l <= max_level; ++l, ++i)
+      {
+        auto dof_handler_p_ =
+          std::make_shared<DoFHandler<dim>>(*mg_triangulations[l]);
+        auto dof_handler_u_ =
+          std::make_shared<DoFHandler<dim>>(*mg_triangulations[l]);
+
+        auto constraints_p_ =
+          std::make_shared<AffineConstraints<NumberPreconditioner>>();
+        auto constraints_u_ =
+          std::make_shared<AffineConstraints<NumberPreconditioner>>();
+        Assert(fe_->size() == 2, ExcInternalError());
+        auto const &fe_p_ = *(*fe_)[1];
+        auto const &fe_u_ = *(*fe_)[0];
+        AssertDimension(fe_u_.tensor_degree() - 1, fe_p_.tensor_degree());
+        auto                         n_q_p_ = fe_u_.tensor_degree() + 1u;
+        QGauss<dim>                  quad_u_(n_q_p_);
+        std::vector<Quadrature<dim>> quads_u_{quad_u_, quad_u_};
+        dof_handler_p_->distribute_dofs(fe_p_);
+        dof_handler_u_->distribute_dofs(fe_u_);
+
+        if (parameters.use_pmg && i < mg_type_level.size() &&
+            mg_type_level[i] == MGType::p)
+          ++fe_;
+        IndexSet locally_relevant_dofs_u_;
+        IndexSet locally_relevant_dofs_p_;
+        DoFTools::extract_locally_relevant_dofs(*dof_handler_u_,
+                                                locally_relevant_dofs_u_);
+        DoFTools::extract_locally_relevant_dofs(*dof_handler_p_,
+                                                locally_relevant_dofs_p_);
+        constraints_u_->reinit(dof_handler_u_->locally_owned_dofs(),
+                               locally_relevant_dofs_u_);
+        constraints_p_->reinit(dof_handler_p_->locally_owned_dofs(),
+                               locally_relevant_dofs_p_);
+#ifndef CHECK_COMPUTE_SYSTEM_MATRIX
+        setup_constraints_up(*constraints_u_,
+                             *constraints_p_,
+                             *dof_handler_u_,
+                             *dof_handler_p_,
+                             parameters,
+                             stokes_parameters);
+        if (!parameters.nitsche_boundary)
+          DoFTools::make_zero_boundary_constraints(*dof_handler_u_,
+                                                   0,
+                                                   *constraints_u_);
+#endif
+        constraints_u_->close();
+        constraints_p_->close();
+
+        // matrix-free operators
+        mg_dof_handlers_u[l] = dof_handler_u_;
+        mg_dof_handlers_p[l] = dof_handler_p_;
+        mg_dof_handlers[l]   = {dof_handler_u_.get(), dof_handler_p_.get()};
+        mg_constraints_u[l]  = constraints_u_;
+        mg_constraints_p[l]  = constraints_p_;
+        mg_constraints[l]    = {constraints_u_.get(), constraints_p_.get()};
+        auto Stokes_mf_ =
+          std::make_shared<StokesMatrixFreeOperator<dim, NumberPreconditioner>>(
+            mapping,
+            mg_dof_handlers[l],
+            mg_constraints[l],
+            quads_u_,
+            viscosity,
+            weak_boundary_ids,
+            outflow_boundary_ids,
+            stokes_parameters.penalty1,
+            stokes_parameters.penalty2,
+            stokes_parameters.outflow_penalty,
+            stokes_parameters.delta0,
+            stokes_parameters.delta1);
+        auto M_mf_ =
+          std::make_shared<MatrixFreeOperatorVector<dim, NumberPreconditioner>>(
+            mapping,
+            *mg_dof_handlers_u[l],
+            *mg_constraints_u[l],
+            quad_u_,
+            1.0,
+            0.0,
+            stokes_parameters.delta0,
+            stokes_parameters.delta1);
+        mg_M_mf[l]      = M_mf_;
+        mg_Stokes_mf[l] = Stokes_mf_;
+
+        auto const &lhs_uK_p = fetw[l][0];
+        auto const &lhs_uM_p = fetw[l][1];
+        if (p_seq[i] != 0)
+          {
+            auto Stokes = std::make_shared<BlockSparseMatrixType>();
+            auto M      = std::make_shared<BlockSparseMatrixType>();
+            auto empty_constraints_p =
+              std::make_shared<AffineConstraints<NumberPreconditioner>>(
+                dof_handler_p_->locally_owned_dofs(), locally_relevant_dofs_p_);
+            auto empty_constraints_u =
+              std::make_shared<AffineConstraints<NumberPreconditioner>>(
+                dof_handler_u_->locally_owned_dofs(), locally_relevant_dofs_u_);
+            DoFTools::make_hanging_node_constraints(*dof_handler_u_,
+                                                    *empty_constraints_u);
+            DoFTools::make_hanging_node_constraints(*dof_handler_p_,
+                                                    *empty_constraints_p);
+            empty_constraints_u->close();
+            empty_constraints_p->close();
+            auto sparsity_pattern =
+              stokes::get_sparsity_pattern(*dof_handler_u_,
+                                           *dof_handler_p_,
+                                           locally_relevant_dofs_u_,
+                                           locally_relevant_dofs_p_,
+                                           *empty_constraints_u,
+                                           *empty_constraints_p,
+                                           (stokes_parameters.delta0 != 0.0) ||
+                                             (stokes_parameters.delta1 != 0.0));
+
+            // create Stokes matrix
+            Stokes->reinit(*sparsity_pattern);
+            BlockVectorT<NumberPreconditioner> mg_x;
+            Stokes_mf_->compute_system_matrix(
+              *Stokes,
+              std::vector<
+                const dealii::AffineConstraints<NumberPreconditioner> *>{
+                empty_constraints_u.get(), empty_constraints_p.get()});
+            //  create vector-valued mass matrix
+            M->reinit(sparsity_pattern->n_block_rows(),
+                      sparsity_pattern->n_block_cols());
+            M->block(0, 0).reinit(sparsity_pattern->block(0, 0));
+            M_mf_->compute_system_matrix(M->block(0, 0),
+                                         empty_constraints_u.get());
+#ifdef CHECK_COMPUTE_SYSTEM_MATRIX
+            if constexpr (std::is_same_v<double, NumberPreconditioner>)
+              {
+                BlockVectorT<NumberPreconditioner> src(2);
+                BlockVectorT<NumberPreconditioner> dst(2);
+                BlockVectorT<NumberPreconditioner> dst2(2);
+                Stokes_mf_->initialize_dof_vector(src);
+                Stokes_mf_->initialize_dof_vector(dst);
+                Stokes_mf_->initialize_dof_vector(dst2);
+                for (unsigned int iv = 0; iv < 2; ++iv)
+                  {
+                    for (unsigned int i = 0; i < src.block(iv).size(); ++i)
+                      {
+                        src              = 0.0;
+                        src.block(iv)(i) = 1.0;
+                        Stokes_mf_->vmult(dst, src);
+                        Stokes->vmult(dst2, src);
+                        dst.add(-1.0, dst2);
+                        if (dst.l2_norm() >= 1.e-16)
+                          throw ExcInternalError();
+                      }
+                  }
+                for (unsigned int i = 0; i < src.block(0).size(); ++i)
+                  {
+                    src             = 0.0;
+                    src.block(0)(i) = 1.0;
+                    M_mf_->vmult(dst.block(0), src.block(0));
+                    M->block(0, 0).vmult(dst2.block(0), src.block(0));
+                    dst.block(0).add(-1.0, dst2.block(0));
+                    if (dst.l2_norm() >= 1.e-16)
+                      throw ExcInternalError();
+                  }
+              }
+#endif
+            if (p_seq[i] != 0)
+              precondition_vanka[l] =
+                std::make_shared<PreconditionVanka<NumberPreconditioner>>(
+                  timer,
+                  Stokes,
+                  M,
+                  sparsity_pattern,
+                  lhs_uK_p,
+                  lhs_uM_p,
+                  mg_dof_handlers[l],
+                  blk_indices[i],
+                  K_mask,
+                  M_mask,
+                  parameters.is_nonlinear);
+          }
+#ifdef MATRIX_BASED
+        *Stokes = 0;
+        Stokes_mf_->compute_system_matrix(*Stokes, mg_constraints[l]);
+        *M = 0;
+        M_mf_->compute_system_matrix(M->block(0, 0), mg_constraints[l][0]);
+        mg_stokes_operators[l] = Stokes;
+        mg_mass_operators[l]   = M;
+        mg_operators[l]        = std::make_shared<SystemNP_M>(
+          timer, *Stokes, M->block(0, 0), lhs_uK_p, lhs_uM_p, blk_indices[i]);
+#else
+        mg_operators[l] = std::make_shared<SystemNP>(
+          timer, *Stokes_mf_, *M_mf_, lhs_uK_p, lhs_uM_p, blk_indices[i]);
+#endif
+      }
+    if (parameters.use_pmg)
+      Assert(fe_ == fe_pmg.end() - 1, ExcInternalError());
+    std::unique_ptr<BlockVectorT<NumberPreconditioner>> tmp1, tmp2;
+    if (!std::is_same_v<Number, NumberPreconditioner>)
+      {
+        tmp1 = std::make_unique<BlockVectorT<NumberPreconditioner>>();
+        tmp2 = std::make_unique<BlockVectorT<NumberPreconditioner>>();
+        matrix->initialize_dof_vector(*tmp1);
+        matrix->initialize_dof_vector(*tmp2);
+      }
+#ifdef MATRIX_BASED
+    using Preconditioner = GMG<dim, Number, SystemNP_M>;
+#else
+    using Preconditioner = GMG<dim, NumberPreconditioner, SystemNP>;
+#endif
+    std::unique_ptr<Preconditioner> preconditioner =
+      std::make_unique<Preconditioner>(timer,
+                                       parameters,
+                                       n_timesteps_at_once,
+                                       mg_type_level,
+                                       poly_mg_sequence_time,
+                                       dof_handlers,
+                                       mg_dof_handlers,
+                                       mg_constraints,
+                                       mg_operators,
+                                       precondition_vanka,
+                                       std::move(tmp1),
+                                       std::move(tmp2));
+    preconditioner->reinit();
+    //
+    /// GMG
+    std::set<types::boundary_id> obstacle_id{2};
+    BlockVectorType              prev_x(2);
     matrix->initialize_dof_vector(prev_x.block(0), 0);
     matrix->initialize_dof_vector(prev_x.block(1), 1);
 
     // Point eval
     std::vector<Point<dim, Number>> real_points;
     if (dim == 2)
-      if (parameters.grid_descriptor == "dfgBenchmark")
+      if (parameters.grid_descriptor == "dfgBenchmark" ||
+          parameters.grid_descriptor == "dfgBenchmarkSquare")
         real_points = {{0.15, 0.2}, {0.25, 0.2}};
       else
         real_points = {{0.875, 0.125}, {0.875, 0.875}};
     else
       {
-        if (parameters.grid_descriptor == "dfgBenchmark")
+        if (parameters.grid_descriptor == "dfgBenchmark" ||
+            parameters.grid_descriptor == "dfgBenchmarkSquare")
           real_points = {{0.15, 0.2, 0.205}, {0.25, 0.2, 0.205}};
         else
           real_points = {{0.875, 0.125, 0.125}, {0.875, 0.875, 0.875}};
@@ -803,32 +850,32 @@ test(dealii::ConditionalOStream &pcout,
     std::vector<std::function<void(const double, VectorType &)>>
       integrate_rhs_function_{integrate_rhs_function_u,
                               integrate_rhs_function_p};
-    std::unique_ptr<
-      TimeIntegratorFO<dim, Number, Preconditioner, SystemN, Nitsche>>
-      step = std::make_unique<
-        TimeIntegratorFO<dim, Number, Preconditioner, SystemN, Nitsche>>(
-        parameters.type,
-        fe_degree,
-        Alpha_1,
-        Gamma_1,
-        parameters.rel_tol,
-        *matrix,
-        *preconditioner,
-        *rhs_matrix,
-        integrate_rhs_function_,
-        n_timesteps_at_once,
-        parameters.extrapolate,
-        *Stokes_nitsche_mf,
-        st_convergence ? 1.e-12 : 1.e-10);
+    StokesOperator<dim, Number> sm;
+    sm.init(*matrix, rhs);
+
+    auto step =
+      std::make_unique<TimeIntegratorFO<dim,
+                                        Number,
+                                        Preconditioner,
+                                        StokesOperator<dim, Number>,
+                                        SystemN,
+                                        Nitsche>>(parameters.type,
+                                                  fe_degree,
+                                                  Alpha_1,
+                                                  Gamma_1,
+                                                  parameters.rel_tol,
+                                                  sm,
+                                                  *preconditioner,
+                                                  *rhs_matrix,
+                                                  integrate_rhs_function_,
+                                                  n_timesteps_at_once,
+                                                  parameters.extrapolate,
+                                                  *Stokes_nitsche_mf,
+                                                  st_convergence ? 1.e-12 :
+                                                                   1.e-10);
     if (parameters.nitsche_boundary)
       for (auto [b_id, g] : d_map)
         step->add_dirichlet_function(0, b_id, g);
-
-    // interpolate initial value
-    evaluate_exact_solution_u(
-      0, x.block(blk_slice.index(n_timesteps_at_once - 1, 0, nt_dofs - 1)));
-    evaluate_exact_solution_p(
-      0, x.block(blk_slice.index(n_timesteps_at_once - 1, 1, nt_dofs - 1)));
 
     double           l2 = 0., l8 = -1., h1_semi = 0., hdiv_semi = 0.;
     double           l2_p = 0., l8_p = -1., h1_semi_p = 0.;
@@ -908,8 +955,8 @@ test(dealii::ConditionalOStream &pcout,
                           output_point_evaluation.size(),
                           output_pt_eval.begin(t_dof + is_cgp));
 
-              BlockVectorSliceT<Number> slice = blk_slice.get_variable(
-                const_cast<BlockVectorT<Number> const &>(x), it, t_dof);
+              BlockVectorSliceT<Number> slice =
+                blk_slice.get_variable(std::as_const(x), it, t_dof);
               auto dl = Stokes_mf.compute_drag_lift(slice,
                                                     obstacle_id,
                                                     drag_lift_constant);
@@ -970,7 +1017,6 @@ test(dealii::ConditionalOStream &pcout,
         ++timestep_number;
         dealii::deallog << "Step " << timestep_number << " t = " << time
                         << std::endl;
-
         equ(prev_x,
             blk_slice.get_variable(x, n_timesteps_at_once - 1, nt_dofs - 1));
         if (!parameters.nitsche_boundary)

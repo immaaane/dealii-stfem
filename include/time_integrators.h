@@ -6,8 +6,8 @@
 #include <deal.II/lac/solver_control.h>
 #include <deal.II/lac/solver_gmres.h>
 
-#include "stmg.h"
 #include "operators.h"
+#include "stmg.h"
 #include "types.h"
 
 namespace dealii
@@ -25,6 +25,7 @@ namespace dealii
             typename Number,
             typename Preconditioner,
             typename System,
+            typename RHSSystem,
             typename NitscheIntegrator = EmptyNitsche>
   class TimeIntegrator
   {
@@ -32,20 +33,21 @@ namespace dealii
     using VectorType      = VectorT<Number>;
     using BlockVectorType = BlockVectorT<Number>;
 
-    TimeIntegrator(TimeStepType              type_,
-                   unsigned int              time_degree_,
-                   FullMatrix<Number> const &Alpha_,
-                   FullMatrix<Number> const &Gamma_,
-                   double const              gmres_tolerance_,
-                   System const             &matrix_,
-                   Preconditioner const     &preconditioner_,
-                   System const             &rhs_matrix_,
-                   std::vector<std::function<void(const double, VectorType &)>>
-                                            integrate_rhs_function,
-                   unsigned int             n_timesteps_at_once_,
-                   bool                     extrapolate_,
-                   const NitscheIntegrator &nitsche_ = NitscheIntegrator(),
-                   double                   abstol   = 1.e-12)
+    TimeIntegrator(
+      TimeStepType              type_,
+      unsigned int              time_degree_,
+      FullMatrix<Number> const &Alpha_,
+      FullMatrix<Number> const &Gamma_,
+      double const              gmres_tolerance_,
+      System const             &matrix_,
+      Preconditioner const     &preconditioner_,
+      RHSSystem const          &rhs_matrix_,
+      std::vector<std::function<void(const double, VectorType &)>>
+                               integrate_rhs_function,
+      unsigned int             n_timesteps_at_once_,
+      bool                     extrapolate_,
+      const NitscheIntegrator &nitsche_             = NitscheIntegrator(),
+      double                   abstol               = 1.e-12)
       : type(type_)
       , time_degree(time_degree_)
       , quad_time(get_time_quad(type, time_degree))
@@ -187,9 +189,11 @@ namespace dealii
               x.block(idx.index(it, i, j)) = 0.0;
     }
 
-    TimeStepType              type;
-    unsigned int              time_degree;
-    Quadrature<1>             quad_time;
+    TimeStepType         type;
+    unsigned int         time_degree;
+    mutable unsigned int update_calls = 0;
+    unsigned int  update_every_step = std::numeric_limits<unsigned int>::max();
+    Quadrature<1> quad_time;
     FullMatrix<Number> const &Alpha;
     FullMatrix<Number> const &Gamma;
 
@@ -197,8 +201,9 @@ namespace dealii
     mutable SolverFGMRES<BlockVectorType> solver;
     Preconditioner const                 &preconditioner;
     System const                         &matrix;
-    System const                         &rhs_matrix;
+    RHSSystem const                      &rhs_matrix;
     NitscheIntegrator const              &nitsche;
+
     std::vector<std::function<void(const double, VectorType &)>>
                  integrate_rhs_function;
     unsigned int n_timesteps_at_once;
@@ -209,7 +214,9 @@ namespace dealii
                  dirichlet_color_to_fun;
     mutable bool dirichlet_function_added = false;
 
-    bool do_extrapolate;
+    bool                 do_extrapolate;
+    FullMatrix<Number>   extrapolation_matrix;
+    mutable unsigned int total_lin_iter;
   };
 
 
@@ -217,20 +224,29 @@ namespace dealii
             typename Number,
             typename Preconditioner,
             typename System,
+            typename RHSSystem         = System,
             typename NitscheIntegrator = EmptyNitsche>
   class TimeIntegratorFO : public TimeIntegrator<dim,
                                                  Number,
                                                  Preconditioner,
                                                  System,
+                                                 RHSSystem,
                                                  NitscheIntegrator>
   {
   public:
-    using VectorType =
-      typename TimeIntegrator<dim, Number, Preconditioner, System>::VectorType;
+    using VectorType = typename TimeIntegrator<dim,
+                                               Number,
+                                               Preconditioner,
+                                               System,
+                                               RHSSystem,
+                                               NitscheIntegrator>::VectorType;
     using BlockVectorType =
-      typename TimeIntegrator<dim, Number, Preconditioner, System>::
-        BlockVectorType;
-
+      typename TimeIntegrator<dim,
+                              Number,
+                              Preconditioner,
+                              System,
+                              RHSSystem,
+                              NitscheIntegrator>::BlockVectorType;
     TimeIntegratorFO(
       TimeStepType              type_,
       unsigned int              time_degree_,
@@ -239,32 +255,37 @@ namespace dealii
       double const              gmres_tolerance_,
       System const             &matrix_,
       Preconditioner const     &preconditioner_,
-      System const             &rhs_matrix_,
+      RHSSystem const          &rhs_matrix_,
       std::vector<std::function<void(const double, VectorType &)>>
                                integrate_rhs_function,
       unsigned int             n_timesteps_at_once_,
-      bool                     extrapolate = true,
-      const NitscheIntegrator &nitsche     = NitscheIntegrator(),
-      double                   abstol      = 1.e-12)
-      : TimeIntegrator<dim, Number, Preconditioner, System, NitscheIntegrator>(
-          type_,
-          time_degree_,
-          Alpha_,
-          Gamma_,
-          gmres_tolerance_,
-          matrix_,
-          preconditioner_,
-          rhs_matrix_,
-          integrate_rhs_function,
-          n_timesteps_at_once_,
-          extrapolate,
-          nitsche,
-          abstol)
+      bool                     extrapolate          = true,
+      const NitscheIntegrator &nitsche              = NitscheIntegrator(),
+      double                   abstol               = 1.e-12)
+      : TimeIntegrator<dim,
+                       Number,
+                       Preconditioner,
+                       System,
+                       RHSSystem,
+                       NitscheIntegrator>(type_,
+                                          time_degree_,
+                                          Alpha_,
+                                          Gamma_,
+                                          gmres_tolerance_,
+                                          matrix_,
+                                          preconditioner_,
+                                          rhs_matrix_,
+                                          integrate_rhs_function,
+                                          n_timesteps_at_once_,
+                                          extrapolate,
+                                          nitsche,
+                                          abstol)
     {}
 
     void
     solve(BlockVectorType   &x,
           const VectorType  &prev_x,
+          BlockVectorType   &rhs,
           const unsigned int timestep_number,
           const double       time,
           const double       time_step) const
@@ -272,7 +293,7 @@ namespace dealii
       AssertDimension(this->idx.n_variables(), 1);
       BlockVectorType prev_x_(1);
       prev_x_.block(0).swap(const_cast<VectorType &>(prev_x));
-      this->solve(x, prev_x_, timestep_number, time, time_step);
+      this->solve(x, prev_x_, rhs, timestep_number, time, time_step);
       prev_x_.block(0).swap(const_cast<VectorType &>(prev_x));
     }
 
@@ -287,7 +308,7 @@ namespace dealii
       this->rhs_matrix.vmult_slice(rhs, prev_x);
       this->assemble_nitsche(rhs, time, time_step);
       this->assemble_force(rhs, time, time_step);
-
+      this->matrix.set_rhs(rhs);
       this->extrapolate(x, prev_x);
       try
         {
@@ -314,15 +335,20 @@ namespace dealii
     }
   };
 
-  template <int dim, typename Number, typename Preconditioner, typename System>
+  template <int dim,
+            typename Number,
+            typename Preconditioner,
+            typename System,
+            typename RHSSystem = System>
   class TimeIntegratorWave
-    : public TimeIntegrator<dim, Number, Preconditioner, System>
+    : public TimeIntegrator<dim, Number, Preconditioner, System, RHSSystem>
   {
   public:
     using VectorType =
-      typename TimeIntegrator<dim, Number, Preconditioner, System>::VectorType;
+      typename TimeIntegrator<dim, Number, Preconditioner, System, RHSSystem>::
+        VectorType;
     using BlockVectorType =
-      typename TimeIntegrator<dim, Number, Preconditioner, System>::
+      typename TimeIntegrator<dim, Number, Preconditioner, System, RHSSystem>::
         BlockVectorType;
 
     TimeIntegratorWave(
@@ -335,13 +361,13 @@ namespace dealii
       double const              gmres_tolerance_,
       System const             &matrix_,
       Preconditioner const     &preconditioner_,
-      System const             &rhs_matrix_,
-      System const             &rhs_matrix_v_,
+      RHSSystem const          &rhs_matrix_,
+      RHSSystem const          &rhs_matrix_v_,
       std::vector<std::function<void(const double, VectorType &)>>
                    integrate_rhs_function,
       unsigned int n_timesteps_at_once_,
       bool         extrapolate = true)
-      : TimeIntegrator<dim, Number, Preconditioner, System>(
+      : TimeIntegrator<dim, Number, Preconditioner, System, RHSSystem>(
           type_,
           time_degree_,
           Alpha_,
@@ -374,16 +400,13 @@ namespace dealii
     void
     solve(BlockVectorType  &u,
           BlockVectorType  &v,
+          BlockVectorType  &rhs,
           VectorType const &prev_u,
           VectorType const &prev_v,
           const unsigned int,
           const double time,
           const double time_step) const
     {
-      BlockVectorType rhs(u.n_blocks());
-      for (unsigned int j = 0; j < rhs.n_blocks(); ++j)
-        this->matrix.initialize_dof_vector(rhs.block(j));
-
       BlockVectorType prev_(1);
       prev_.block(0).swap(const_cast<VectorType &>(prev_u));
       this->rhs_matrix.vmult_slice(rhs, prev_);
@@ -395,7 +418,7 @@ namespace dealii
       prev_.block(0).swap(const_cast<VectorType &>(prev_v));
 
       this->assemble_force(rhs, time, time_step);
-
+      this->matrix.set_rhs(rhs);
       try
         {
           this->solver.solve(this->matrix, u, rhs, this->preconditioner);
@@ -424,7 +447,7 @@ namespace dealii
     }
 
   private:
-    System const &rhs_matrix_v;
+    RHSSystem const &rhs_matrix_v;
 
     FullMatrix<Number> const &Beta;
     FullMatrix<Number> const &Zeta;

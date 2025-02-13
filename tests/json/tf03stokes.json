@@ -7,7 +7,7 @@
     "problemType"            : "stokes",
     "spaceTimeConvergenceTest": "false",
     "colorizeBoundary"       : "true",
-    "gridDescriptor"         : "dfgBenchmark",
+    "gridDescriptor"         : "dfgBenchmarkSquare",
     "endTime"                : "8",
     "nTimestepsAtOnce"       : "1",
     "feDegree"               : "1",
@@ -29,5 +29,6 @@
     "smoothingRange"         : "5.0",
     "coarseGridMaxiter"      : "10",
     "pMgType"                : "bisect",
+    "nonlinearTreatment"     : "none",
     "additionalFile"         : "tests/json/stokes_dfg.json"
 }

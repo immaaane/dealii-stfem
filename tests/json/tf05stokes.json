@@ -28,6 +28,7 @@
     "smoothingSteps"         : "1",
     "smoothingRange"         : "5.0",
     "coarseGridMaxiter"      : "10",
+    "nonlinearTreatment"     : "none",
     "pMgType"                : "bisect",
     "additionalFile"         : "tests/json/stokes_lid.json"
 }

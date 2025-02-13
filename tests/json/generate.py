@@ -42,6 +42,7 @@ def run_instance(options, subdivisions, source_point, lower_left, upper_right):
     datastore["smoothingDegree"] = options.smoothingDegree
     datastore["smoothingSteps"] = options.smoothingSteps;
     datastore["relaxation"] = options.relaxation
+    datastore["spaceTimeLevelFirst"] = options.spaceTimeLevelFirst
     datastore["coarseGridSmootherType"] = options.coarseGridSmootherType
     datastore["coarseGridMaxiter"] = options.coarseGridMaxiter
     datastore["coarseGridAbstol"] = options.coarseGridAbstol
@@ -88,7 +89,8 @@ def parseArguments():
     parser.add_argument("--coarseGridSmootherType", default="Smoother");
     parser.add_argument("--coarseGridMaxiter", type=int, default=10);
     parser.add_argument("--coarseGridAbstol", type=float, default=1.e-20);
-    parser.add_argument("--coarseGridReltol", type=float, default=1.e-4);
+    parser.add_argument("--coarseGridReltol", type=float, default=1.e-8);
+    parser.add_argument("--spaceTimeLevelFirst", action="store_true");
     parser.add_argument("--restrictIsTransposeProlongate", action="store_true");
     parser.add_argument("--variable", action="store_true");
     parser.add_argument("--colorizeBoundary", action="store_true");
@@ -106,7 +108,10 @@ def main():
     else:
         if options.dim==3:
             if not options.spaceTimeConvergenceTest:
-                subdivisions="5,5,5"
+                if options.problemType =="cdr":
+                    subdivisions="2,2,2"
+                else:
+                    subdivisions="5,5,5"
                 source_point="0.0,0.0,0.0"
                 lower_left="-1.0,-1.0,-1.0"
                 upper_right="1.0,1.0,1.0"
@@ -117,7 +122,10 @@ def main():
                 upper_right="1.0,1.0,1.0"
         else:
             if not options.spaceTimeConvergenceTest:
-                subdivisions="5,5"
+                if options.problemType =="cdr":
+                    subdivisions="2,2"
+                else:
+                    subdivisions="5,5"
                 source_point="0.0,0.0"
                 lower_left="-1.0,-1.0"
                 upper_right="1.0,1.0"

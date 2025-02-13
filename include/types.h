@@ -32,15 +32,71 @@ using BlockVectorSliceT =
 template <typename Number>
 using MutableBlockVectorSliceT =
   std::vector<std::reference_wrapper<VectorT<Number>>>;
+template <typename Number>
+using SparsityCache =
+  std::optional<std::pair<dealii::IndexSet, dealii::IndexSet>>;
+namespace dealii
+{
+  template <int dim, typename Number, typename Number2 = Number>
+  Tensor<2, dim, Number2>
+  initialize_tensor_from_vector(const std::vector<Number> &values)
+  {
+    Tensor<2, dim, Number2> tensor;
+    if (values.size() == 1)
+      for (unsigned int i = 0; i < dim; ++i)
+        tensor[i][i] = values[0];
+    else if (values.size() == dim)
+      for (unsigned int i = 0; i < dim; ++i)
+        tensor[i][i] = values[i];
+    else if (values.size() == dim * dim)
+      for (unsigned int i = 0, index = 0; i < dim; ++i)
+        for (unsigned int j = 0; j < dim; ++j)
+          tensor[i][j] = values[index++];
+    else
+      Assert(false, ExcInternalError());
 
+    return tensor;
+  }
+
+  template <int dim, typename Number, typename Number2 = Number>
+  constexpr dealii::Tensor<1, dim, Number>
+  constant_tensor(Number2 const &number)
+  {
+    dealii::Tensor<1, dim, Number> ten{};
+    for (size_t i = 0; i < dim; ++i)
+      ten[i] = number;
+    return ten;
+  }
+
+  template <int dim, typename Number, typename Number2 = Number>
+  constexpr dealii::Tensor<2, dim, Number>
+  diagonal_tensor(Number2 const &number)
+  {
+    dealii::Tensor<2, dim, Number> ten{};
+    for (size_t i = 0; i < dim; ++i)
+      ten[i][i] = number;
+    return ten;
+  }
+} // namespace dealii
 constexpr dealii::types::manifold_id cylindrical_manifold_id = 0;
 constexpr dealii::types::manifold_id tfi_manifold_id         = 1;
 
 enum class ProblemType : unsigned int
 {
-  heat   = 1,
-  wave   = 2,
-  stokes = 3,
+  heat    = 1,
+  wave    = 2,
+  stokes  = 3,
+  maxwell = 4,
+  cdr     = 5
+};
+
+enum class CDRProblem : unsigned int
+{
+  rotating_hill     = 0,
+  rotating_hill_eps = 1,
+  step_layer        = 2,
+  hemker            = 3,
+  fichera           = 4
 };
 
 enum class CoarseningType : int
@@ -49,9 +105,33 @@ enum class CoarseningType : int
   space_and_time = 1,
 };
 
+enum class SupportedSmoothers : unsigned int
+{
+  Identity   = 0,
+  Relaxation = 1,
+  Chebyshev  = 2
+};
+
+enum class NonlinearTreatment : unsigned int
+{
+  None     = 0,
+  Implicit = 1,
+  Explicit = 2,
+};
+
+enum class NonlinearExtrapolation : unsigned int
+{
+  Auto         = 0,
+  Constant     = 1,
+  Polynomial   = 2,
+  LeastSquares = 3,
+};
+
 static std::unordered_map<std::string, ProblemType> const str_to_problem_type =
   {{"heat", ProblemType::heat},
    {"wave", ProblemType::wave},
+   {"cdr", ProblemType::cdr},
+   {"maxwell", ProblemType::maxwell},
    {"stokes", ProblemType::stokes}};
 
 static std::unordered_map<std::string,
@@ -71,3 +151,25 @@ static std::unordered_map<std::string,
 static std::unordered_map<std::string, CoarseningType> const
   str_to_coarsening_type = {{"space_and_time", CoarseningType::space_and_time},
                             {"space_or_time", CoarseningType::space_or_time}};
+
+static std::unordered_map<std::string, SupportedSmoothers> const
+  str_to_smoother_type = {{"chebyshev", SupportedSmoothers::Chebyshev},
+                          {"relaxation", SupportedSmoothers::Relaxation}};
+static std::unordered_map<std::string, CDRProblem> const str_to_cdr_problem = {
+  {"rotatingHill", CDRProblem::rotating_hill},
+  {"rotatingHillEps", CDRProblem::rotating_hill_eps},
+  {"stepLayer", CDRProblem::step_layer},
+  {"hemker", CDRProblem::hemker},
+  {"fichera", CDRProblem::fichera}};
+
+static std::unordered_map<std::string, NonlinearTreatment> const
+  str_to_nonlinear_treatment = {{"none", NonlinearTreatment::None},
+                                {"explicit", NonlinearTreatment::Explicit},
+                                {"implicit", NonlinearTreatment::Implicit}};
+
+static std::unordered_map<std::string, NonlinearExtrapolation> const
+  str_to_nonlinear_extrapolation = {
+    {"auto", NonlinearExtrapolation::Auto},
+    {"constant", NonlinearExtrapolation::Constant},
+    {"polynomial", NonlinearExtrapolation::Polynomial},
+    {"leastSquares", NonlinearExtrapolation::LeastSquares}};

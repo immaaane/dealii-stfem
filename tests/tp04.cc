@@ -55,13 +55,14 @@ run_tests()
                                                   MGType::k,
                                                   MGType::k};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space);
     expect_eq(result,
               expected_mg_type_level,
               "Test 1: No space, lower level tau, then k");
@@ -81,13 +82,14 @@ run_tests()
                                                   MGType::tau,
                                                   MGType::tau};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space);
     expect_eq(result,
               expected_mg_type_level,
               "Test 2: No space lower level k, then tau");
@@ -108,21 +110,22 @@ run_tests()
                                                   MGType::tau,
                                                   MGType::h};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space);
     expect_eq(result,
               expected_mg_type_level,
               "Test 3: Interleaving of tau with space, then k");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 true);
-    std::vector<size_t> expected_p = {1, 1, 1, 0, 1};
+    std::vector<unsigned int> expected_p = {1, 1, 1, 0, 1};
     expect_eq(p_result,
               expected_p,
               "Test 3: Interleaving of tau with space, then k");
@@ -140,21 +143,22 @@ run_tests()
     std::vector<MGType> expected_mg_type_level = {
       MGType::k, MGType::h, MGType::k, MGType::h, MGType::k, MGType::h};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space);
     expect_eq(result,
               expected_mg_type_level,
               "Test 4: Equal number of k and space levels");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 true);
-    std::vector<size_t> expected_p = {1, 0, 1, 0, 1, 0, 1};
+    std::vector<unsigned int> expected_p = {1, 0, 1, 0, 1, 0, 1};
     expect_eq(p_result,
               expected_p,
               "Test 4: Equal number of k and space levels");
@@ -181,21 +185,22 @@ run_tests()
                                                   MGType::k,
                                                   MGType::h};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space);
     expect_eq(result,
               expected_mg_type_level,
               "Test 5: Many space levels, some tau and k levels");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 true);
-    std::vector<size_t> expected_p = {1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1};
+    std::vector<unsigned int> expected_p = {1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1};
     expect_eq(p_result,
               expected_p,
               "Test 5: Many space levels, some tau and k levels");
@@ -222,21 +227,22 @@ run_tests()
                                                   MGType::h,
                                                   MGType::k};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space);
     expect_eq(result,
               expected_mg_type_level,
               "Test 6: Test 5, but time before space");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 true);
-    std::vector<size_t> expected_p = {1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1};
+    std::vector<unsigned int> expected_p = {1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1};
     expect_eq(p_result, expected_p, "Test 6: Test 5, but time before space");
   }
   // Test 1:
@@ -252,23 +258,24 @@ run_tests()
     std::vector<MGType> expected_mg_type_level = {
       MGType::tau, MGType::tau, MGType::k, MGType::p, MGType::k, MGType::p};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space,
-                                       true,
-                                       true);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space,
+                                  true,
+                                  true);
     expect_eq(result,
               expected_mg_type_level,
               "Test 1: No space, lower level tau, then k");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 true);
-    std::vector<size_t> expected_p = {1, 1, 1, 0, 1, 0, 1};
+    std::vector<unsigned int> expected_p = {1, 1, 1, 0, 1, 0, 1};
     expect_eq(p_result,
               expected_p,
               "Test 1: No space, lower level tau, then k");
@@ -286,23 +293,24 @@ run_tests()
     std::vector<MGType> expected_mg_type_level = {
       MGType::k, MGType::tau, MGType::tau, MGType::p, MGType::tau};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space,
-                                       true,
-                                       true);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space,
+                                  true,
+                                  true);
     expect_eq(result,
               expected_mg_type_level,
               "Test 2: No space lower level k, then tau");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 true);
-    std::vector<size_t> expected_p = {1, 1, 1, 1, 0, 1};
+    std::vector<unsigned int> expected_p = {1, 1, 1, 1, 0, 1};
     expect_eq(p_result, expected_p, "Test 2: No space lower level k, then tau");
   }
   // Test 3:
@@ -318,23 +326,24 @@ run_tests()
     std::vector<MGType> expected_mg_type_level = {
       MGType::k, MGType::tau, MGType::p, MGType::tau, MGType::h};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space,
-                                       true,
-                                       true);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space,
+                                  true,
+                                  true);
     expect_eq(result,
               expected_mg_type_level,
               "Test 3: Interleaving of tau with space, then k");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 true);
-    std::vector<size_t> expected_p = {1, 1, 0, 1, 0, 1};
+    std::vector<unsigned int> expected_p = {1, 1, 0, 1, 0, 1};
     expect_eq(p_result,
               expected_p,
               "Test 3: Interleaving of tau with space, then k");
@@ -352,23 +361,24 @@ run_tests()
     std::vector<MGType> expected_mg_type_level = {
       MGType::tau, MGType::tau, MGType::h, MGType::k, MGType::p};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space,
-                                       true,
-                                       true);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space,
+                                  true,
+                                  true);
     expect_eq(result,
               expected_mg_type_level,
               "Test 3a: Interleaving of tau with space, then k");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 true);
-    std::vector<size_t> expected_p = {1, 1, 0, 1, 0, 1};
+    std::vector<unsigned int> expected_p = {1, 1, 0, 1, 0, 1};
     expect_eq(p_result,
               expected_p,
               "Test 3a: Interleaving of tau with space, then k");
@@ -393,23 +403,24 @@ run_tests()
                                                   MGType::k,
                                                   MGType::h};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space,
-                                       true,
-                                       true);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space,
+                                  true,
+                                  true);
     expect_eq(result,
               expected_mg_type_level,
               "Test 4: Equal number of k and space levels");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 true);
-    std::vector<size_t> expected_p = {1, 1, 1, 1, 0, 1, 0, 1, 0, 1};
+    std::vector<unsigned int> expected_p = {1, 1, 1, 1, 0, 1, 0, 1, 0, 1};
     expect_eq(p_result,
               expected_p,
               "Test 4: Equal number of k and space levels");
@@ -434,23 +445,24 @@ run_tests()
                                                   MGType::k,
                                                   MGType::p};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space,
-                                       true,
-                                       true);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space,
+                                  true,
+                                  true);
     expect_eq(result,
               expected_mg_type_level,
               "Test 4a: Equal number of k and space levels");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 true);
-    std::vector<size_t> expected_p = {1, 1, 1, 1, 0, 1, 0, 1, 0, 1};
+    std::vector<unsigned int> expected_p = {1, 1, 1, 1, 0, 1, 0, 1, 0, 1};
     expect_eq(p_result,
               expected_p,
               "Test 4a: Equal number of k and space levels");
@@ -478,23 +490,25 @@ run_tests()
                                                   MGType::k,
                                                   MGType::p};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space,
-                                       true,
-                                       true);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space,
+                                  true,
+                                  true);
     expect_eq(result,
               expected_mg_type_level,
               "Test 5: Many space levels, some tau and k levels");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 true);
-    std::vector<size_t> expected_p = {1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1};
+    std::vector<unsigned int> expected_p = {
+      1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1};
     expect_eq(p_result,
               expected_p,
               "Test 5: Many space levels, some tau and k levels");
@@ -522,23 +536,25 @@ run_tests()
                                                   MGType::p,
                                                   MGType::k};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space,
-                                       true,
-                                       true);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space,
+                                  true,
+                                  true);
     expect_eq(result,
               expected_mg_type_level,
               "Test 6: Test 5, but time before space");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 true);
-    std::vector<size_t> expected_p = {1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1};
+    std::vector<unsigned int> expected_p = {
+      1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1};
     expect_eq(p_result, expected_p, "Test 6: Test 5, but time before space");
   }
   // Test 1:
@@ -554,23 +570,24 @@ run_tests()
     std::vector<MGType> expected_mg_type_level = {
       MGType::tau, MGType::p, MGType::tau, MGType::p, MGType::k, MGType::k};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space,
-                                       true,
-                                       false);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space,
+                                  true,
+                                  false);
     expect_eq(result,
               expected_mg_type_level,
               "Test 1: No space, lower level tau, then k");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 false);
-    std::vector<size_t> expected_p = {1, 1, 0, 1, 0, 1, 1};
+    std::vector<unsigned int> expected_p = {1, 1, 0, 1, 0, 1, 1};
     expect_eq(p_result,
               expected_p,
               "Test 1: No space, lower level tau, then k");
@@ -588,23 +605,24 @@ run_tests()
     std::vector<MGType> expected_mg_type_level = {
       MGType::k, MGType::p, MGType::tau, MGType::tau, MGType::tau};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space,
-                                       true,
-                                       false);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space,
+                                  true,
+                                  false);
     expect_eq(result,
               expected_mg_type_level,
               "Test 2: No space lower level k, then tau");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 false);
-    std::vector<size_t> expected_p = {1, 1, 0, 1, 1, 1};
+    std::vector<unsigned int> expected_p = {1, 1, 0, 1, 1, 1};
     expect_eq(p_result, expected_p, "Test 2: No space lower level k, then tau");
   }
   // Test 3:
@@ -620,23 +638,24 @@ run_tests()
     std::vector<MGType> expected_mg_type_level = {
       MGType::k, MGType::p, MGType::tau, MGType::h, MGType::tau};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space,
-                                       true,
-                                       false);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space,
+                                  true,
+                                  false);
     expect_eq(result,
               expected_mg_type_level,
               "Test 3: Interleaving of tau with space, then k");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 false);
-    std::vector<size_t> expected_p = {1, 1, 0, 1, 0, 1};
+    std::vector<unsigned int> expected_p = {1, 1, 0, 1, 0, 1};
     expect_eq(p_result,
               expected_p,
               "Test 3: Interleaving of tau with space, then k");
@@ -654,23 +673,24 @@ run_tests()
     std::vector<MGType> expected_mg_type_level = {
       MGType::tau, MGType::h, MGType::tau, MGType::p, MGType::k};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space,
-                                       true,
-                                       false);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space,
+                                  true,
+                                  false);
     expect_eq(result,
               expected_mg_type_level,
               "Test 3a: Interleaving of tau with space, then k");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 false);
-    std::vector<size_t> expected_p = {1, 1, 0, 1, 0, 1};
+    std::vector<unsigned int> expected_p = {1, 1, 0, 1, 0, 1};
     expect_eq(p_result,
               expected_p,
               "Test 3a: Interleaving of tau with space, then k");
@@ -695,23 +715,24 @@ run_tests()
                                                   MGType::h,
                                                   MGType::h};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space,
-                                       true,
-                                       false);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space,
+                                  true,
+                                  false);
     expect_eq(result,
               expected_mg_type_level,
               "Test 4: Equal number of k and space levels");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 false);
-    std::vector<size_t> expected_p = {1, 1, 0, 1, 0, 1, 1, 1, 1, 1};
+    std::vector<unsigned int> expected_p = {1, 1, 0, 1, 0, 1, 1, 1, 1, 1};
     expect_eq(p_result,
               expected_p,
               "Test 4: Equal number of k and space levels");
@@ -736,23 +757,24 @@ run_tests()
                                                   MGType::p,
                                                   MGType::p};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space,
-                                       true,
-                                       false);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space,
+                                  true,
+                                  false);
     expect_eq(result,
               expected_mg_type_level,
               "Test 4a: Equal number of k and space levels");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 false);
-    std::vector<size_t> expected_p = {1, 1, 0, 1, 0, 1, 1, 1, 1, 1};
+    std::vector<unsigned int> expected_p = {1, 1, 0, 1, 0, 1, 1, 1, 1, 1};
     expect_eq(p_result,
               expected_p,
               "Test 4a: Equal number of k and space levels");
@@ -780,23 +802,25 @@ run_tests()
                                                   MGType::h,
                                                   MGType::p};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space,
-                                       true,
-                                       false);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space,
+                                  true,
+                                  false);
     expect_eq(result,
               expected_mg_type_level,
               "Test 5: Many space levels, some tau and k levels");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 false);
-    std::vector<size_t> expected_p = {1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1};
+    std::vector<unsigned int> expected_p = {
+      1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1};
     expect_eq(p_result,
               expected_p,
               "Test 5: Many space levels, some tau and k levels");
@@ -824,23 +848,25 @@ run_tests()
                                                   MGType::h,
                                                   MGType::p};
 
-    auto result = get_time_mg_sequence(n_sp_lvl,
-                                       k_seq,
-                                       n_timesteps_at_once,
-                                       n_timesteps_at_once_min,
-                                       lower_lvl,
-                                       coarsening_type,
-                                       time_before_space,
-                                       true,
-                                       false);
+    auto result = get_mg_sequence(n_sp_lvl,
+                                  k_seq,
+                                  std::vector<unsigned int>{},
+                                  n_timesteps_at_once,
+                                  n_timesteps_at_once_min,
+                                  lower_lvl,
+                                  coarsening_type,
+                                  time_before_space,
+                                  true,
+                                  false);
     expect_eq(result,
               expected_mg_type_level,
               "Test 6: Test 5, but time before space");
-    auto                p_result   = get_precondition_stmg_types(result,
+    auto                      p_result   = get_precondition_stmg_types(result,
                                                 coarsening_type,
                                                 time_before_space,
                                                 false);
-    std::vector<size_t> expected_p = {1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1};
+    std::vector<unsigned int> expected_p = {
+      1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1};
     expect_eq(p_result, expected_p, "Test 6: Test 5, but time before space");
   }
 }
