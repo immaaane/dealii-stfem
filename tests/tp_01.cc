@@ -231,17 +231,17 @@ test(dealii::ConditionalOStream &pcout,
     std::vector<std::array<FullMatrix<NumberPreconditioner>, 5>> fetw_w;
     if (parameters.problem == ProblemType::heat)
       fetw = get_fe_time_weights<NumberPreconditioner>(parameters.type,
-                                                       fe_degree,
                                                        time_step_size,
                                                        n_timesteps_at_once,
+                                                       parameters.delta_time,
                                                        mg_type_level,
                                                        poly_mg_sequence_time);
     else if (parameters.problem == ProblemType::wave)
       fetw_w =
         get_fe_time_weights_wave<NumberPreconditioner>(parameters.type,
-                                                       fe_degree,
                                                        time_step_size,
                                                        n_timesteps_at_once,
+                                                       parameters.delta_time,
                                                        mg_type_level,
                                                        poly_mg_sequence_time);
 
@@ -433,7 +433,10 @@ test(dealii::ConditionalOStream &pcout,
 
     BlockVectorType x(n_blocks), v(n_blocks), rhs(n_blocks);
     for (unsigned int i = 0; i < n_blocks; ++i)
-      matrix->initialize_dof_vector(x.block(i));
+      {
+        matrix->initialize_dof_vector(x.block(i));
+				matrix->initialize_dof_vector(rhs.block(i));
+      }
     VectorType prev_x, prev_v;
     matrix->initialize_dof_vector(prev_x);
     if (parameters.problem == ProblemType::wave)
