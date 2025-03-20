@@ -1491,7 +1491,7 @@ namespace dealii
           sparse_matrix,
           &StokesMatrixFreeOperator::do_cell_integral_local<mode>,
           this);
-    };
+    }
 
     using FECellIntegratorP = FEEvaluation<dim, -1, 0, 1, Number>;
     using FECellIntegratorU = FEEvaluation<dim, -1, 0, dim, Number>;

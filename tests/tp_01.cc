@@ -21,8 +21,8 @@
 #include "exact_solution.h"
 #include "fe_time.h"
 #include "getopt++.h"
-#include "stmg.h"
 #include "operators.h"
+#include "stmg.h"
 #include "time_integrators.h"
 
 using namespace dealii;
@@ -231,6 +231,7 @@ test(dealii::ConditionalOStream &pcout,
     std::vector<std::array<FullMatrix<NumberPreconditioner>, 5>> fetw_w;
     if (parameters.problem == ProblemType::heat)
       fetw = get_fe_time_weights<NumberPreconditioner>(parameters.type,
+                                                       fe_degree,
                                                        time_step_size,
                                                        n_timesteps_at_once,
                                                        mg_type_level,
@@ -238,6 +239,7 @@ test(dealii::ConditionalOStream &pcout,
     else if (parameters.problem == ProblemType::wave)
       fetw_w =
         get_fe_time_weights_wave<NumberPreconditioner>(parameters.type,
+                                                       fe_degree,
                                                        time_step_size,
                                                        n_timesteps_at_once,
                                                        mg_type_level,
@@ -429,7 +431,7 @@ test(dealii::ConditionalOStream &pcout,
       constraints.distribute(tmp);
     };
 
-    BlockVectorType x(n_blocks), v(n_blocks);
+    BlockVectorType x(n_blocks), v(n_blocks), rhs(n_blocks);
     for (unsigned int i = 0; i < n_blocks; ++i)
       matrix->initialize_dof_vector(x.block(i));
     VectorType prev_x, prev_v;
@@ -492,18 +494,35 @@ test(dealii::ConditionalOStream &pcout,
                                                   *exact_solution,
                                                   evaluate_numerical_solution);
 
-    std::unique_ptr<TimeIntegrator<dim, Number, Preconditioner, SystemN>> step;
-    using TimeHeat = TimeIntegratorFO<dim, Number, Preconditioner, SystemN>;
-    using TimeWave = TimeIntegratorWave<dim, Number, Preconditioner, SystemN>;
+    std::unique_ptr<TimeIntegrator<dim,
+                                   Number,
+                                   Preconditioner,
+                                   AcousticWaveOperator<dim, Number>,
+                                   SystemN>>
+      step;
+    using TimeHeat = TimeIntegratorFO<dim,
+                                      Number,
+                                      Preconditioner,
+                                      HeatOperator<dim, Number>,
+                                      SystemN>;
+    using TimeWave = TimeIntegratorWave<dim,
+                                        Number,
+                                        Preconditioner,
+                                        AcousticWaveOperator<dim, Number>,
+                                        SystemN>;
+
     std::vector<std::function<void(const double, VectorType &)>>
       integrate_rhs_function_{integrate_rhs_function};
+    AcousticWaveOperator<dim, Number> am;
+    am.init(*matrix, rhs);
+
     if (parameters.problem == ProblemType::heat)
       step = std::make_unique<TimeHeat>(parameters.type,
                                         fe_degree,
                                         Alpha_1,
                                         Gamma_1,
                                         1.e-12,
-                                        *matrix,
+                                        am,
                                         *preconditioner,
                                         *rhs_matrix,
                                         integrate_rhs_function_,
@@ -517,7 +536,7 @@ test(dealii::ConditionalOStream &pcout,
                                         Gamma_1,
                                         Zeta_1,
                                         1.e-12,
-                                        *matrix,
+                                        am,
                                         *preconditioner,
                                         *rhs_matrix,
                                         *rhs_matrix_v,
@@ -631,13 +650,19 @@ test(dealii::ConditionalOStream &pcout,
         prev_x = x.block(x.n_blocks() - 1);
         if (parameters.problem == ProblemType::heat)
           static_cast<TimeHeat const *>(step.get())
-            ->solve(x, prev_x, timestep_number, time, time_step_size);
+            ->solve(x, prev_x, rhs, timestep_number, time, time_step_size);
         else
           {
             prev_v = v.block(v.n_blocks() - 1);
             static_cast<TimeWave const *>(step.get())
-              ->solve(
-                x, v, prev_x, prev_v, timestep_number, time, time_step_size);
+              ->solve(x,
+                      v,
+                      rhs,
+                      prev_x,
+                      prev_v,
+                      timestep_number,
+                      time,
+                      time_step_size);
           }
         total_gmres_iterations += step->last_step();
         for (unsigned int i = 0; i < n_blocks; ++i)
